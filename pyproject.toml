@@ -1,7 +1,7 @@
 [project]
 name = "tool-foundry"
 version = "0.1.0"
-description = "Dynamic tool creation and execution service for Amigo agents"
+description = "Dynamic tool creation and execution service for AI agents"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [

@@ -1,5 +1,5 @@
 """
-Tool Foundry - Dynamic tool creation and execution service for Amigo agents.
+Tool Foundry - Dynamic tool creation and execution service for Foundry agents.
 
 This package provides:
 - API layer for tool management

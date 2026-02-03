@@ -49,33 +49,33 @@ def get_secret(name: str, required: bool = True) -> Optional[str]:
 
 
 @dataclass
-class AmigoCredentials:
-    """Credentials for Amigo API integration."""
+class EventCredentials:
+    """Credentials for Event API integration."""
 
     api_base_url: str
     api_key: str
 
 
 @lru_cache()
-def get_amigo_credentials() -> Optional[AmigoCredentials]:
+def get_event_credentials() -> Optional[EventCredentials]:
     """
-    Get Amigo API credentials.
+    Get Event API credentials.
 
     These should be set via Modal secrets:
-        modal secret create amigo-credentials \
-            AMIGO_API_BASE_URL=https://api.amigo.ai \
-            AMIGO_API_KEY=your-api-key
+        modal secret create event-credentials \
+            FOUNDRY_EVENT_API_BASE_URL=https://api.event.ai \
+            FOUNDRY_EVENT_API_KEY=your-api-key
 
     Returns:
-        AmigoCredentials if configured, None otherwise.
+        EventCredentials if configured, None otherwise.
     """
-    api_base_url = get_secret("AMIGO_API_BASE_URL", required=False)
-    api_key = get_secret("AMIGO_API_KEY", required=False)
+    api_base_url = get_secret("FOUNDRY_EVENT_API_BASE_URL", required=False)
+    api_key = get_secret("FOUNDRY_EVENT_API_KEY", required=False)
 
     if api_base_url and api_key:
-        return AmigoCredentials(api_base_url=api_base_url, api_key=api_key)
+        return EventCredentials(api_base_url=api_base_url, api_key=api_key)
 
-    logger.warning("Amigo credentials not configured, event emission disabled")
+    logger.warning("Event credentials not configured, event emission disabled")
     return None
 
 

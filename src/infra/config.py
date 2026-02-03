@@ -53,10 +53,10 @@ class Settings(BaseModel):
     agent_max_tokens: int = Field(default=4096, ge=256, le=8192)
     agent_temperature: float = Field(default=0.0, ge=0.0, le=1.0)
 
-    # Amigo integration
-    amigo_api_base_url: Optional[str] = Field(
+    # Event integration
+    event_api_base_url: Optional[str] = Field(
         default=None,
-        description="Amigo API base URL for system events",
+        description="Event API base URL for system events",
     )
 
     # Feature flags
@@ -70,7 +70,7 @@ class Settings(BaseModel):
     )
     enable_event_emission: bool = Field(
         default=True,
-        description="Emit system events to Amigo",
+        description="Emit system events",
     )
 
     class Config:
@@ -83,7 +83,7 @@ def get_settings() -> Settings:
     return Settings(
         environment=os.getenv("FOUNDRY_ENVIRONMENT", "development"),
         api_base_url=os.getenv("FOUNDRY_API_BASE_URL"),
-        amigo_api_base_url=os.getenv("AMIGO_API_BASE_URL"),
+        event_api_base_url=os.getenv("FOUNDRY_EVENT_API_URL"),
         agent_model=os.getenv("FOUNDRY_AGENT_MODEL", "claude-sonnet-4-20250514"),
     )
 

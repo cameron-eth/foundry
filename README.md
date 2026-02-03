@@ -1,6 +1,6 @@
 # Tool Foundry
 
-Dynamic tool creation and execution service for Amigo agents. Built on [Modal](https://modal.com) for zero-infrastructure serverless deployment.
+Dynamic tool creation and execution service for AI agents. Built on [Modal](https://modal.com) for zero-infrastructure serverless deployment.
 
 ## Why Modal?
 
@@ -29,7 +29,7 @@ flowchart TB
         Functions[Dynamic Functions]
     end
     
-    subgraph amigo [Amigo Backend]
+    subgraph events [Event Backend]
         Events[System Events API]
     end
     
@@ -77,9 +77,9 @@ That's it. No Terraform, no AWS console, no VPC configuration.
 Set these in Modal dashboard or via CLI:
 
 ```bash
-modal secret create amigo-credentials \
-  API_BASE_URL=https://api.amigo.ai \
-  API_KEY=your-amigo-api-key
+modal secret create foundry-credentials \
+  API_BASE_URL=https://api.example.com \
+  API_KEY=your-event-api-key
 ```
 
 ### Test It
@@ -225,20 +225,20 @@ tool-foundry/
 │   │   └── store.py            # Registry storage backends
 │   └── events/
 │       ├── __init__.py
-│       └── amigo.py            # System event emission
+│       └── events.py            # System event emission
 └── tests/
     ├── __init__.py
     ├── test_api.py
     └── test_validator.py
 ```
 
-## Amigo Tool Integration Guide
+## Tool Integration Guide
 
-This section documents how Amigo agents interact with Tool Foundry via the `toolfoundry_construct` and `toolfoundry_invoke` tools.
+This section documents how AI agents interact with Tool Foundry via the `toolfoundry_construct` and `toolfoundry_invoke` tools.
 
 ### Overview
 
-Tool Foundry provides two Amigo tools:
+Tool Foundry provides two Foundry tools:
 
 | Tool | Purpose |
 |------|---------|
@@ -264,7 +264,7 @@ https://cameron-40558--toolfoundry-serve.modal.run
 ```json
 {
   "capability_description": "Calculate BMI from height in meters and weight in kilograms",
-  "org_id": "amigolabs",
+  "org_id": "your-org",
   "conversation_id": "conv-abc123",
   "context": "User is asking about health metrics",
   "ttl_hours": 24,
@@ -558,7 +558,7 @@ modal serve foundry.py
 
 ### Phase 2: Production
 - Neon PostgreSQL for persistent registry
-- System event integration with Amigo
+- System event integration with backend
 - TTL management and cleanup
 - Error handling and logging
 - Rate limiting
@@ -571,5 +571,5 @@ modal serve foundry.py
 
 ## License
 
-Proprietary - Amigo AI
+Proprietary - Foundry
 # tool-foundry

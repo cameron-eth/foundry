@@ -1,6 +1,6 @@
-"""Amigo system event emission.
+"""Event system event emission.
 
-This module handles sending system events to the Amigo backend
+This module handles sending system events to the Event backend
 to notify agents when tools are ready for use.
 """
 
@@ -11,13 +11,13 @@ from typing import Dict, Literal, Optional
 import httpx
 
 from src.infra.logging import get_logger
-from src.infra.secrets import get_amigo_credentials
+from src.infra.secrets import get_event_credentials
 
 logger = get_logger("events")
 
 
-class AmigoEventEmitter:
-    """Client for emitting system events to Amigo backend."""
+class EventEventEmitter:
+    """Client for emitting system events to Event backend."""
 
     def __init__(self, api_base_url: str, api_key: str):
         self.api_base_url = api_base_url.rstrip("/")
@@ -31,7 +31,7 @@ class AmigoEventEmitter:
         payload: Dict,
     ) -> bool:
         """
-        Emit a system event to the Amigo backend.
+        Emit a system event to the Event backend.
 
         Args:
             org_id: The organization ID.
@@ -118,12 +118,12 @@ class AmigoEventEmitter:
         )
 
 
-def create_event_emitter() -> Optional[AmigoEventEmitter]:
+def create_event_emitter() -> Optional[EventEventEmitter]:
     """
     Create an event emitter from configured credentials.
 
     Returns:
-        AmigoEventEmitter if credentials configured, None otherwise.
+        EventEventEmitter if credentials configured, None otherwise.
     """
     from src.infra.config import get_settings
 
@@ -133,12 +133,12 @@ def create_event_emitter() -> Optional[AmigoEventEmitter]:
         logger.debug("Event emission disabled in settings")
         return None
 
-    credentials = get_amigo_credentials()
+    credentials = get_event_credentials()
     if not credentials:
-        logger.debug("Amigo credentials not configured")
+        logger.debug("Event credentials not configured")
         return None
 
-    return AmigoEventEmitter(
+    return EventEventEmitter(
         api_base_url=credentials.api_base_url,
         api_key=credentials.api_key,
     )

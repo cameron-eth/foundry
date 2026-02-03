@@ -43,16 +43,16 @@ foundry_image = (
 anthropic_secret = modal.Secret.from_name("anthropic-credentials")
 exa_secret = modal.Secret.from_name("exa-credentials")
 
-# Optional Amigo credentials (for event emission)
-optional_amigo_secret = modal.Secret.from_dict({
-    "AMIGO_API_BASE_URL": "",
-    "AMIGO_API_KEY": "",
+# Optional Event credentials (for event emission)
+optional_event_secret = modal.Secret.from_dict({
+    "FOUNDRY_EVENT_API_URL": "",
+    "FOUNDRY_EVENT_API_KEY": "",
 })
 
 
 @app.function(
     image=foundry_image,
-    secrets=[anthropic_secret, exa_secret, optional_amigo_secret],
+    secrets=[anthropic_secret, exa_secret, optional_event_secret],
     timeout=300,
     memory=512,
 )
@@ -73,7 +73,7 @@ def serve():
 
 @app.function(
     image=foundry_image,
-    secrets=[anthropic_secret, exa_secret, optional_amigo_secret],
+    secrets=[anthropic_secret, exa_secret, optional_event_secret],
     timeout=120,
     memory=1024,
 )
@@ -101,7 +101,7 @@ async def build_tool_async(
     """
     from src.orchestration.workflow import BuildRequest, process_build_request
     from src.registry.store import get_registry
-    from src.events.amigo import create_event_emitter
+    from src.events.emitter import create_event_emitter
     from src.infra.logging import setup_logging, get_logger
 
     setup_logging()
@@ -145,7 +145,7 @@ async def build_tool_async(
 
 @app.function(
     image=foundry_image,
-    secrets=[optional_amigo_secret],
+    secrets=[optional_event_secret],
     schedule=modal.Cron("0 * * * *"),  # Every hour
     timeout=120,
 )
@@ -208,9 +208,9 @@ def main():
     print()
     print("Setup secrets:")
     print("  modal secret create anthropic-credentials ANTHROPIC_API_KEY=...")
-    print("  modal secret create amigo-credentials \\")
-    print("    AMIGO_API_BASE_URL=https://api.amigo.ai \\")
-    print("    AMIGO_API_KEY=...")
+    print("  modal secret create foundry-credentials \\")
+    print("    FOUNDRY_EVENT_API_URL=https://api.example.com \\")
+    print("    FOUNDRY_EVENT_API_KEY=...")
     print()
 
     # Run health check
