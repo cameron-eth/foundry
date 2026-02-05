@@ -230,3 +230,50 @@ class DeprecateToolRequest(BaseModel):
         default=None,
         description="ID of the replacement tool, if any",
     )
+
+
+class SearchRequest(BaseModel):
+    """Request to search the web using DuckDuckGo scraping."""
+
+    query: str = Field(..., description="Search query", min_length=1, max_length=500)
+    num_results: int = Field(default=10, ge=1, le=30, description="Number of results per query")
+    num_searches: int = Field(
+        default=1,
+        ge=1,
+        le=10,
+        description="Number of related queries to generate and search (1=single query, 5+=comprehensive)",
+    )
+    optimize_query: bool = Field(
+        default=True,
+        description="Use GPT-4o-mini to optimize/expand query for better search results",
+    )
+    contents: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Fetch page content: {'text': {'max_characters': 500}} to extract text from results",
+    )
+
+
+class SearchResult(BaseModel):
+    """A single search result."""
+
+    title: str = Field(..., description="Title of the result")
+    url: str = Field(..., description="URL of the result")
+    text: Optional[str] = Field(default=None, description="Extracted text content")
+    score: Optional[float] = Field(default=None, description="Relevance score")
+    published_date: Optional[str] = Field(default=None, description="Publication date")
+    author: Optional[str] = Field(default=None, description="Author name")
+
+
+class SearchResponse(BaseModel):
+    """Response from search API."""
+
+    success: bool = Field(..., description="Whether the search succeeded")
+    query: str = Field(..., description="The original search query")
+    generated_queries: Optional[List[str]] = Field(
+        default=None,
+        description="List of generated search queries (when num_searches > 1)",
+    )
+    results: List[SearchResult] = Field(default_factory=list, description="Search results (deduplicated)")
+    num_results: int = Field(..., description="Number of results returned")
+    num_searches_performed: int = Field(default=1, description="Number of searches actually performed")
+    error: Optional[str] = Field(default=None, description="Error message if failed")

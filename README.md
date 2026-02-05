@@ -52,19 +52,35 @@ flowchart TB
 
 - Python 3.11+
 - Modal account (free tier available at https://modal.com)
+- Anthropic API key (for AI-driven tool generation)
 
-### Setup (5 minutes)
+### Option 1: Automated Setup (Recommended)
 
 ```bash
-# 1. Clone the repo
-git clone <repo-url>
-cd tool-foundry
+# Make the deployment script executable
+chmod +x deploy.sh
 
-# 2. Install dependencies
-pip install modal fastapi pydantic httpx
+# Run setup (installs Modal, authenticates, configures secrets)
+./deploy.sh setup
 
-# 3. Authenticate with Modal
+# Deploy to Modal
+./deploy.sh deploy
+```
+
+### Option 2: Manual Setup
+
+```bash
+# 1. Install dependencies
+pip install modal fastapi pydantic httpx anthropic
+
+# 2. Authenticate with Modal (opens browser)
 modal token new
+
+# 3. Create required secrets
+modal secret create anthropic-credentials ANTHROPIC_API_KEY=your-api-key
+
+# Optional: Enable web search in tools
+modal secret create exa-credentials EXA_API_KEY=your-exa-key
 
 # 4. Deploy
 modal deploy foundry.py
@@ -72,14 +88,35 @@ modal deploy foundry.py
 
 That's it. No Terraform, no AWS console, no VPC configuration.
 
-### Environment Variables
+### Your Deployment URL
 
-Set these in Modal dashboard or via CLI:
+After deployment, your API will be available at:
+```
+https://{your-modal-workspace}--toolfoundry-serve.modal.run
+```
+
+Find your workspace ID in the deployment output or Modal dashboard.
+
+### Required Secrets
+
+| Secret Name | Variables | Purpose |
+|-------------|-----------|---------|
+| `anthropic-credentials` | `ANTHROPIC_API_KEY` | **Required** for AI tool generation |
+| `exa-credentials` | `EXA_API_KEY` | Optional: enables web search in tools |
+
+### Optional Environment Variables
+
+Set these in Modal dashboard or via CLI for advanced configuration:
 
 ```bash
+# Optional: Event emission to external API
 modal secret create foundry-credentials \
-  API_BASE_URL=https://api.example.com \
-  API_KEY=your-event-api-key
+  FOUNDRY_EVENT_API_URL=https://api.example.com \
+  FOUNDRY_EVENT_API_KEY=your-event-api-key
+
+# Optional: API key authentication
+# TOOLFOUNDRY_REQUIRE_AUTH=true
+# TOOLFOUNDRY_API_KEYS=key1,key2,key3
 ```
 
 ### Test It
@@ -247,9 +284,12 @@ Tool Foundry provides two Foundry tools:
 
 ### API Base URL
 
+After deploying, your URL will follow this format:
 ```
-https://cameron-40558--toolfoundry-serve.modal.run
+https://{your-workspace}--toolfoundry-serve.modal.run
 ```
+
+Find your workspace ID in the Modal dashboard or from the deploy output.
 
 ---
 
@@ -289,8 +329,8 @@ https://cameron-40558--toolfoundry-serve.modal.run
   "tool_id": "tool-d1db3b21208b",
   "status": "ready",
   "message": "Tool created successfully",
-  "manifest_url": "https://cameron-40558--toolfoundry-serve.modal.run/v1/tools/tool-d1db3b21208b",
-  "invoke_url": "https://cameron-40558--toolfoundry-serve.modal.run/v1/tools/tool-d1db3b21208b/invoke"
+  "manifest_url": "https://{your-workspace}--toolfoundry-serve.modal.run/v1/tools/tool-d1db3b21208b",
+  "invoke_url": "https://{your-workspace}--toolfoundry-serve.modal.run/v1/tools/tool-d1db3b21208b/invoke"
 }
 ```
 
@@ -327,7 +367,7 @@ Use this to understand what inputs the tool requires before invoking.
   "output_schema": {
     "type": "object"
   },
-  "invoke_url": "https://cameron-40558--toolfoundry-serve.modal.run/v1/tools/tool-d1db3b21208b/invoke"
+  "invoke_url": "https://{your-workspace}--toolfoundry-serve.modal.run/v1/tools/tool-d1db3b21208b/invoke"
 }
 ```
 
@@ -467,8 +507,8 @@ def parse_tool_result(response: dict) -> Any:
 ┌─────────────────────────────────────────────────────────────────┐
 │ Agent: Tool ready. Use toolfoundry_invoke.                     │
 │                                                                 │
-│ POST /v1/tools/tool-abc123/invoke                               │
-│ { "input": { "height_m": 1.75, "weight_kg": 70 } }              │
+│ POST /v1/tools/tool-abc123/invoke                              │
+│ { "input": { "height_m": 1.75, "weight_kg": 70 } }             │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -514,7 +554,10 @@ Tools can be built for:
 
 ### 7. Swagger Documentation
 
-Interactive API docs: https://cameron-40558--toolfoundry-serve.modal.run/docs
+Interactive API docs available at your deployment URL:
+```
+https://{your-workspace}--toolfoundry-serve.modal.run/docs
+```
 
 ## Cost Estimate
 

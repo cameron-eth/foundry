@@ -78,7 +78,77 @@ Tools can make HTTP requests using `httpx` or `requests` to these APIs:
       return response.json()
   ```
 
-When a capability requires search or external data, use these APIs.
+### Polymarket Prediction Markets API (No API Key Required)
+- Base URL: https://gamma-api.polymarket.com
+- Use for: prediction market data, odds, events, betting markets
+- Endpoints:
+  - GET /markets - List/search prediction markets
+  - GET /events - List events with markets
+  
+- Query Parameters for /markets:
+  - limit (int): Number of results (default 100)
+  - offset (int): Pagination offset
+  - order (str): Field to order by (e.g., "volume", "liquidity")
+  - ascending (bool): Sort direction
+  - closed (bool): Filter by closed/open status
+  - tag_id (int): Filter by tag
+  
+- Example - Search Markets:
+  ```python
+  import httpx
+  
+  def main(limit: int = 10, order: str = "volume") -> dict:
+      response = httpx.get(
+          "https://gamma-api.polymarket.com/markets",
+          params={{"limit": limit, "order": order, "ascending": False, "closed": False}},
+          timeout=30.0
+      )
+      response.raise_for_status()
+      markets = response.json()
+      return {{
+          "markets": [
+              {{
+                  "question": m.get("question"),
+                  "slug": m.get("slug"),
+                  "volume": m.get("volume"),
+                  "liquidity": m.get("liquidity"),
+                  "outcomes": m.get("outcomes"),
+                  "outcomePrices": m.get("outcomePrices"),
+                  "endDate": m.get("endDate"),
+              }}
+              for m in markets
+          ]
+      }}
+  ```
+
+- Example - Get Market by Slug:
+  ```python
+  import httpx
+  
+  def main(slug: str) -> dict:
+      response = httpx.get(
+          "https://gamma-api.polymarket.com/markets",
+          params={{"slug": [slug]}},
+          timeout=30.0
+      )
+      response.raise_for_status()
+      markets = response.json()
+      if not markets:
+          return {{"error": "Market not found"}}
+      m = markets[0]
+      return {{
+          "question": m.get("question"),
+          "description": m.get("description"),
+          "volume": m.get("volume"),
+          "liquidity": m.get("liquidity"),
+          "outcomes": m.get("outcomes"),
+          "outcomePrices": m.get("outcomePrices"),
+          "endDate": m.get("endDate"),
+          "active": m.get("active"),
+      }}
+  ```
+
+When a capability requires search, external data, or prediction markets, use these APIs.
 
 ## Output Format
 
@@ -124,31 +194,23 @@ Only output valid JSON, no other text."""
 class ToolPlanner:
     """Plans tool structure from capability descriptions."""
 
-    def __init__(self, anthropic_client: Optional[Any] = None):
+    def __init__(self, llm_client: Optional[Any] = None):
         """
         Initialize the planner.
 
         Args:
-            anthropic_client: Optional Anthropic client. If not provided,
-                              will be created when needed.
+            llm_client: Optional LLM client (BaseLLMClient). If not provided,
+                        will use the default provider.
         """
-        self._client = anthropic_client
+        self._llm_client = llm_client
         self._allowed_modules = sorted(ALLOWED_MODULES)
 
-    def _get_client(self) -> Any:
-        """Get or create Anthropic client."""
-        if self._client is None:
-            try:
-                import anthropic
-                from src.infra.secrets import get_anthropic_api_key
-
-                api_key = get_anthropic_api_key()
-                if not api_key:
-                    raise ValueError("Anthropic API key not configured")
-                self._client = anthropic.Anthropic(api_key=api_key)
-            except ImportError:
-                raise ImportError("anthropic package required for agent features")
-        return self._client
+    def _get_llm_client(self) -> Any:
+        """Get or create LLM client."""
+        if self._llm_client is None:
+            from src.agent.providers import get_llm_client
+            self._llm_client = get_llm_client()
+        return self._llm_client
 
     async def create_plan(
         self,
@@ -168,33 +230,27 @@ class ToolPlanner:
         from src.infra.config import get_settings
 
         settings = get_settings()
-        client = self._get_client()
+        llm = self._get_llm_client()
 
         # Build the user message
         user_message = f"Create a tool plan for: {capability_description}"
         if context:
             user_message += f"\n\nAdditional context: {context}"
 
-        logger.info(f"Creating plan for: {capability_description[:100]}...")
+        logger.info(f"Creating plan for: {capability_description[:100]}... (using {llm.provider_name})")
 
-        # Call Claude (run sync client in thread pool for async compatibility)
-        import asyncio
-
-        def _call_claude():
-            return client.messages.create(
-                model=settings.agent_model,
-                max_tokens=settings.agent_max_tokens,
-                temperature=settings.agent_temperature,
-                system=PLANNER_SYSTEM_PROMPT.format(
-                    allowed_modules=", ".join(self._allowed_modules)
-                ),
-                messages=[{"role": "user", "content": user_message}],
-            )
-
-        response = await asyncio.to_thread(_call_claude)
+        # Call LLM
+        response = await llm.generate(
+            system_prompt=PLANNER_SYSTEM_PROMPT.format(
+                allowed_modules=", ".join(self._allowed_modules)
+            ),
+            user_message=user_message,
+            max_tokens=settings.agent_max_tokens,
+            temperature=settings.agent_temperature,
+        )
 
         # Parse the response
-        response_text = response.content[0].text.strip()
+        response_text = response.content
 
         # Handle potential markdown code blocks
         if response_text.startswith("```"):

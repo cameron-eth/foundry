@@ -72,6 +72,89 @@ def main(query: str, num_results: int = 10) -> dict:
     return response.json()
 ```
 
+### Polymarket Prediction Markets API (No API Key Required)
+- Base URL: `https://gamma-api.polymarket.com`
+- Use for: prediction markets, odds, probabilities, events
+
+List Markets Example:
+```python
+import httpx
+
+def main(limit: int = 10, order_by: str = "volume") -> dict:
+    \"\"\"Get top prediction markets from Polymarket.\"\"\"
+    response = httpx.get(
+        "https://gamma-api.polymarket.com/markets",
+        params={{
+            "limit": limit,
+            "order": order_by,
+            "ascending": False,
+            "closed": False,
+        }},
+        timeout=30.0
+    )
+    response.raise_for_status()
+    markets = response.json()
+    
+    results = []
+    for m in markets:
+        # Parse outcome prices (stored as JSON string)
+        prices = m.get("outcomePrices", "")
+        if prices:
+            import json
+            try:
+                prices = json.loads(prices)
+            except:
+                prices = []
+        
+        results.append({{
+            "question": m.get("question"),
+            "slug": m.get("slug"),
+            "volume": float(m.get("volume", 0) or 0),
+            "liquidity": float(m.get("liquidity", 0) or 0),
+            "outcomes": m.get("outcomes"),
+            "prices": prices,
+            "end_date": m.get("endDate"),
+        }})
+    
+    return {{"markets": results, "count": len(results)}}
+```
+
+Search Events Example:
+```python
+import httpx
+
+def main(search_term: str, limit: int = 5) -> dict:
+    \"\"\"Search Polymarket events by keyword.\"\"\"
+    response = httpx.get(
+        "https://gamma-api.polymarket.com/events",
+        params={{"limit": limit, "closed": False}},
+        timeout=30.0
+    )
+    response.raise_for_status()
+    events = response.json()
+    
+    # Filter by search term
+    search_lower = search_term.lower()
+    matching = [
+        e for e in events 
+        if search_lower in (e.get("title", "") or "").lower()
+        or search_lower in (e.get("description", "") or "").lower()
+    ]
+    
+    return {{
+        "events": [
+            {{
+                "title": e.get("title"),
+                "slug": e.get("slug"),
+                "description": e.get("description"),
+                "volume": e.get("volume"),
+                "liquidity": e.get("liquidity"),
+            }}
+            for e in matching[:limit]
+        ]
+    }}
+```
+
 ## Visualization with Matplotlib
 
 You CAN use `matplotlib` for generating charts/plots. Return images as base64-encoded strings.
@@ -150,30 +233,22 @@ def main(principal: float, rate: float, time: float, n: int = 12) -> float:
 class CodeGenerator:
     """Generates Python code from tool plans."""
 
-    def __init__(self, anthropic_client: Optional[Any] = None):
+    def __init__(self, llm_client: Optional[Any] = None):
         """
         Initialize the generator.
 
         Args:
-            anthropic_client: Optional Anthropic client.
+            llm_client: Optional LLM client (BaseLLMClient).
         """
-        self._client = anthropic_client
+        self._llm_client = llm_client
         self._allowed_modules = sorted(ALLOWED_MODULES)
 
-    def _get_client(self) -> Any:
-        """Get or create Anthropic client."""
-        if self._client is None:
-            try:
-                import anthropic
-                from src.infra.secrets import get_anthropic_api_key
-
-                api_key = get_anthropic_api_key()
-                if not api_key:
-                    raise ValueError("Anthropic API key not configured")
-                self._client = anthropic.Anthropic(api_key=api_key)
-            except ImportError:
-                raise ImportError("anthropic package required for agent features")
-        return self._client
+    def _get_llm_client(self) -> Any:
+        """Get or create LLM client."""
+        if self._llm_client is None:
+            from src.agent.providers import get_llm_client
+            self._llm_client = get_llm_client()
+        return self._llm_client
 
     async def generate_code(
         self,
@@ -193,7 +268,7 @@ class CodeGenerator:
         from src.infra.config import get_settings
 
         settings = get_settings()
-        client = self._get_client()
+        llm = self._get_llm_client()
 
         # Build the prompt
         user_message = f"""Generate Python code for this tool:
@@ -219,7 +294,7 @@ Examples:
         generated_code: Optional[str] = None
 
         for attempt in range(max_retries + 1):
-            logger.info(f"Generating code for {plan.name}, attempt {attempt + 1}")
+            logger.info(f"Generating code for {plan.name}, attempt {attempt + 1} (using {llm.provider_name})")
 
             # Add error context for retries
             if last_error and attempt > 0:
@@ -227,23 +302,17 @@ Examples:
             else:
                 retry_message = user_message
 
-            # Call Claude (run sync client in thread pool for async compatibility)
-            import asyncio
+            # Call LLM
+            response = await llm.generate(
+                system_prompt=GENERATOR_SYSTEM_PROMPT.format(
+                    allowed_modules=", ".join(self._allowed_modules)
+                ),
+                user_message=retry_message,
+                max_tokens=settings.agent_max_tokens,
+                temperature=settings.agent_temperature,
+            )
 
-            def _call_claude():
-                return client.messages.create(
-                    model=settings.agent_model,
-                    max_tokens=settings.agent_max_tokens,
-                    temperature=settings.agent_temperature,
-                    system=GENERATOR_SYSTEM_PROMPT.format(
-                        allowed_modules=", ".join(self._allowed_modules)
-                    ),
-                    messages=[{"role": "user", "content": retry_message}],
-                )
-
-            response = await asyncio.to_thread(_call_claude)
-
-            generated_code = response.content[0].text.strip()
+            generated_code = response.content
 
             # Remove markdown code blocks if present
             if generated_code.startswith("```"):

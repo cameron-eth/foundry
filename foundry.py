@@ -23,8 +23,13 @@ foundry_image = (
         "pydantic>=2.0.0",
         "httpx>=0.27.0",
         "requests>=2.31.0",
-        # Agent dependencies
-        "anthropic>=0.18.0",
+        # LLM Provider SDKs (multi-model support)
+        "anthropic>=0.18.0",  # Claude
+        "openai>=1.0.0",      # GPT / Codex
+        # Web search & scraping
+        "duckduckgo-search>=6.0.0",
+        "beautifulsoup4>=4.12.0",
+        "lxml>=5.0.0",
         # Allowed packages for tools
         "numpy",
         "pandas",
@@ -39,9 +44,31 @@ foundry_image = (
 # Secrets configuration
 # Create with:
 #   modal secret create anthropic-credentials ANTHROPIC_API_KEY=...
+#   modal secret create openai-credentials OPENAI_API_KEY=...
 #   modal secret create exa-credentials EXA_API_KEY=...
+#   modal secret create foundry-branding FOUNDRY_API_TITLE="Your API" ...
+#
+# LLM Provider Selection (set in foundry-branding):
+#   FOUNDRY_LLM_PROVIDER=openai    # Use OpenAI GPT/Codex
+#   FOUNDRY_LLM_PROVIDER=anthropic # Use Claude (default)
+#   FOUNDRY_AGENT_MODEL=codex-5.2  # Specific model name
+
 anthropic_secret = modal.Secret.from_name("anthropic-credentials")
-exa_secret = modal.Secret.from_name("exa-credentials")
+openai_secret = modal.Secret.from_name("openai-credentials")
+branding_secret = modal.Secret.from_name("foundry-branding")
+
+# Search API credentials (Brave Search - free tier: 2000 queries/month)
+# Get your API key at: https://brave.com/search/api/
+try:
+    brave_secret = modal.Secret.from_name("brave-credentials")
+except:
+    brave_secret = modal.Secret.from_dict({"BRAVE_API_KEY": ""})
+
+# Optional: Exa API (if you have it)
+try:
+    exa_secret = modal.Secret.from_name("exa-credentials")
+except:
+    exa_secret = modal.Secret.from_dict({"EXA_API_KEY": ""})
 
 # Optional Event credentials (for event emission)
 optional_event_secret = modal.Secret.from_dict({
@@ -52,7 +79,7 @@ optional_event_secret = modal.Secret.from_dict({
 
 @app.function(
     image=foundry_image,
-    secrets=[anthropic_secret, exa_secret, optional_event_secret],
+    secrets=[anthropic_secret, openai_secret, brave_secret, exa_secret, optional_event_secret, branding_secret],
     timeout=300,
     memory=512,
 )
@@ -73,7 +100,7 @@ def serve():
 
 @app.function(
     image=foundry_image,
-    secrets=[anthropic_secret, exa_secret, optional_event_secret],
+    secrets=[anthropic_secret, openai_secret, exa_secret, optional_event_secret],
     timeout=120,
     memory=1024,
 )
@@ -216,3 +243,4 @@ def main():
     # Run health check
     result = health_check.local()
     print("Health check:", result)
+# Force rebuild Mon Feb  2 21:04:31 EST 2026

@@ -68,11 +68,19 @@ class ToolBuilderAgent:
     2. Code Generation - Generate Python implementation
     3. Validation - Validate the generated code
     4. Return the complete tool specification
+    
+    Supports multiple LLM providers:
+    - Anthropic Claude (default)
+    - OpenAI GPT/Codex
+    
+    Configure via environment:
+    - FOUNDRY_LLM_PROVIDER: "anthropic" or "openai"
+    - FOUNDRY_AGENT_MODEL: model name (e.g., "claude-sonnet-4-20250514" or "codex-5.2")
     """
 
     def __init__(
         self,
-        anthropic_client: Optional[Any] = None,
+        llm_client: Optional[Any] = None,
         planner: Optional[ToolPlanner] = None,
         generator: Optional[CodeGenerator] = None,
     ):
@@ -80,12 +88,12 @@ class ToolBuilderAgent:
         Initialize the builder agent.
 
         Args:
-            anthropic_client: Optional shared Anthropic client.
+            llm_client: Optional LLM client (BaseLLMClient from providers).
             planner: Optional custom planner instance.
             generator: Optional custom generator instance.
         """
-        self.planner = planner or ToolPlanner(anthropic_client)
-        self.generator = generator or CodeGenerator(anthropic_client)
+        self.planner = planner or ToolPlanner(llm_client)
+        self.generator = generator or CodeGenerator(llm_client)
 
     async def build_from_description(
         self,

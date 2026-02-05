@@ -30,6 +30,40 @@ class Settings(BaseModel):
         default=None,
         description="Base URL for the deployed API (set by Modal)",
     )
+    
+    # Swagger/OpenAPI Branding
+    api_title: str = Field(
+        default="Tool Foundry API",
+        description="Title shown in Swagger docs",
+    )
+    api_description: Optional[str] = Field(
+        default=None,
+        description="Custom description prepended to Swagger docs",
+    )
+    api_version: str = Field(
+        default="1.0.0",
+        description="API version shown in Swagger docs",
+    )
+    contact_name: Optional[str] = Field(
+        default=None,
+        description="Contact name shown in Swagger docs",
+    )
+    contact_email: Optional[str] = Field(
+        default=None,
+        description="Contact email shown in Swagger docs",
+    )
+    contact_url: Optional[str] = Field(
+        default=None,
+        description="Contact URL shown in Swagger docs",
+    )
+    logo_url: Optional[str] = Field(
+        default=None,
+        description="Logo URL shown in Swagger docs header",
+    )
+    terms_of_service_url: Optional[str] = Field(
+        default=None,
+        description="Terms of service URL for Swagger docs",
+    )
 
     # Tool execution limits
     tool_timeout_seconds: int = Field(default=30, ge=1, le=300)
