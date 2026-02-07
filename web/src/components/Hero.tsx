@@ -93,8 +93,7 @@ export default function Hero() {
           >
             <span className="block">AI Agents Building</span>
             <span className="block">
-              Tools for{" "}
-              <span className="relative inline-block w-[180px] sm:w-[240px] md:w-[280px] lg:w-[320px]">
+              Tools for<span className="relative inline-block w-[180px] sm:w-[240px] md:w-[280px] lg:w-[320px]">
                 <AnimatePresence mode="wait">
                   <motion.span
                     key={currentWordIndex}
