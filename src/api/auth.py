@@ -99,7 +99,10 @@ async def validate_api_key(api_key: Optional[str] = Security(api_key_header)) ->
     
     if result.get("expires_at"):
         from datetime import datetime, timezone
-        if datetime.now(timezone.utc) > result["expires_at"]:
+        expires = result["expires_at"]
+        if isinstance(expires, str):
+            expires = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+        if datetime.now(timezone.utc) > expires:
             raise HTTPException(status_code=403, detail="API key has expired")
     
     # Update last_used_at
@@ -108,15 +111,20 @@ async def validate_api_key(api_key: Optional[str] = Security(api_key_header)) ->
         [str(result["key_id"])],
     )
     
+    # Neon HTTP API may return arrays as strings like "{a,b,c}"
+    scopes = result.get("scopes", [])
+    if isinstance(scopes, str):
+        scopes = [s.strip() for s in scopes.strip("{}").split(",") if s.strip()]
+    
     return AuthContext(
         org_id=str(result["org_id"]),
         user_id=str(result["user_id"]) if result.get("user_id") else None,
         api_key_id=str(result["key_id"]),
         plan=result["plan"],
-        scopes=result.get("scopes", []),
-        monthly_build_limit=result["monthly_build_limit"],
-        monthly_invoke_limit=result["monthly_invoke_limit"],
-        monthly_search_limit=result["monthly_search_limit"],
+        scopes=scopes,
+        monthly_build_limit=int(result["monthly_build_limit"]),
+        monthly_invoke_limit=int(result["monthly_invoke_limit"]),
+        monthly_search_limit=int(result["monthly_search_limit"]),
     )
 
 

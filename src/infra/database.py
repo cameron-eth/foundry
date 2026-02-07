@@ -1,45 +1,65 @@
 """Database client for Neon PostgreSQL.
 
 Provides async connection pool and query helpers for the Foundry API.
+Uses Neon's serverless HTTP driver so we don't need compiled PostgreSQL
+drivers in the Modal container.
 """
 
 from __future__ import annotations
 
 import os
-from contextlib import asynccontextmanager
+import json
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse, urlunparse
 
 from src.infra.logging import get_logger
 
 logger = get_logger("database")
 
-# We use httpx to call Neon's serverless driver endpoint
-# This avoids needing psycopg2/asyncpg binary deps in Modal
 import httpx
-import json
 
 
 class NeonDB:
     """Lightweight Neon database client using the serverless HTTP API.
     
-    Supports two connection modes:
-    1. Neon REST API URL (e.g., https://ep-xxx.apirest...neon.tech/neondb/rest/v1)
-    2. PostgreSQL connection string (postgresql://user:pass@host/db)
-    
-    Uses HTTP so we don't need compiled PostgreSQL drivers in Modal.
+    Uses Neon's SQL-over-HTTP endpoint (/sql) which works without
+    compiled PostgreSQL drivers.
     """
     
-    def __init__(
-        self,
-        connection_string: Optional[str] = None,
-        api_url: Optional[str] = None,
-    ):
+    def __init__(self, connection_string: Optional[str] = None):
         self._connection_string = connection_string or os.environ.get("DATABASE_URL", "")
-        self._api_url = api_url or os.environ.get(
-            "NEON_API_URL",
-            "https://ep-purple-band-ail6lb3c.apirest.c-4.us-east-1.aws.neon.tech/neondb/rest/v1"
-        )
         self._client: Optional[httpx.AsyncClient] = None
+        self._http_host: Optional[str] = None
+        self._http_connection_string: Optional[str] = None
+        
+        if self._connection_string:
+            self._setup_http_endpoint()
+    
+    def _setup_http_endpoint(self):
+        """Derive the HTTP endpoint from the connection string.
+        
+        Neon's /sql endpoint requires the non-pooler hostname.
+        Pooler hostnames contain '-pooler' which must be stripped.
+        """
+        parsed = urlparse(self._connection_string)
+        host = parsed.hostname or ""
+        
+        # Strip -pooler suffix for HTTP endpoint
+        # e.g., ep-purple-band-ail6lb3c-pooler.c-4.us-east-1.aws.neon.tech
+        #     → ep-purple-band-ail6lb3c.c-4.us-east-1.aws.neon.tech
+        http_host = host.replace("-pooler", "")
+        self._http_host = http_host
+        
+        # Build a non-pooler connection string for the Neon-Connection-String header
+        # Replace the hostname in the connection string
+        self._http_connection_string = self._connection_string.replace(host, http_host)
+        
+        # Also remove channel_binding parameter if present (not supported over HTTP)
+        self._http_connection_string = self._http_connection_string.replace("&channel_binding=require", "")
+        self._http_connection_string = self._http_connection_string.replace("?channel_binding=require&", "?")
+        self._http_connection_string = self._http_connection_string.replace("?channel_binding=require", "")
+        
+        logger.info(f"Neon HTTP endpoint: {http_host}")
     
     @property
     def is_configured(self) -> bool:
@@ -49,19 +69,6 @@ class NeonDB:
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=30.0)
         return self._client
-    
-    def _parse_connection_string(self) -> Dict[str, str]:
-        """Parse postgresql://user:pass@host/db into components."""
-        from urllib.parse import urlparse
-        parsed = urlparse(self._connection_string)
-        return {
-            "host": parsed.hostname or "",
-            "port": str(parsed.port or 5432),
-            "user": parsed.username or "",
-            "password": parsed.password or "",
-            "database": parsed.path.lstrip("/") if parsed.path else "",
-            "sslmode": "require",
-        }
     
     async def execute(
         self,
@@ -81,12 +88,8 @@ class NeonDB:
             logger.warning("Database not configured, skipping query")
             return []
         
-        conn = self._parse_connection_string()
         client = await self._get_client()
-        
-        # Use Neon serverless SQL-over-HTTP
-        # The proxy endpoint is at the same host as the connection
-        api_url = f"https://{conn['host']}/sql"
+        api_url = f"https://{self._http_host}/sql"
         
         payload = {
             "query": query,
@@ -98,7 +101,7 @@ class NeonDB:
                 api_url,
                 json=payload,
                 headers={
-                    "Neon-Connection-String": self._connection_string,
+                    "Neon-Connection-String": self._http_connection_string,
                     "Content-Type": "application/json",
                 },
             )
@@ -106,13 +109,23 @@ class NeonDB:
             
             data = response.json()
             
-            # Neon returns { rows: [...], fields: [...] }
+            # Neon HTTP API returns:
+            # { rows: [{col: val, ...}, ...], fields: [...], rowAsArray: false }
+            # Rows are already dicts when rowAsArray is false (default)
             if "rows" in data:
-                fields = [f["name"] for f in data.get("fields", [])]
-                return [dict(zip(fields, row)) for row in data["rows"]]
+                if data.get("rowAsArray", False):
+                    # Array mode: zip field names with row arrays
+                    fields = [f["name"] for f in data.get("fields", [])]
+                    return [dict(zip(fields, row)) for row in data["rows"]]
+                else:
+                    # Object mode (default): rows are already dicts
+                    return data["rows"]
             
             return []
             
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Database query failed (HTTP {e.response.status_code}): {e.response.text}")
+            raise
         except httpx.HTTPError as e:
             logger.error(f"Database query failed: {e}")
             raise
