@@ -88,7 +88,7 @@ export default function Hero() {
           transition={{ duration: 0.8, ease: "easeOut" }}
         >
           <h1 
-            className="text-5xl sm:text-6xl md:text-7xl lg:text-8xl text-gray-900 leading-[1.1] tracking-tight"
+            className="text-6xl sm:text-7xl md:text-7xl lg:text-8xl text-gray-900 leading-[1.1] tracking-tight"
             style={{ fontFamily: "var(--font-instrument), Georgia, serif" }}
           >
             <span className="block">AI Agents Building</span>
