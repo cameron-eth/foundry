@@ -14,6 +14,7 @@ html {
 
 body {
   font-family: var(--font-outfit), -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: #030712;
 }
 
 /* Code block syntax highlighting */
