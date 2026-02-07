@@ -148,7 +148,21 @@ Tools can make HTTP requests using `httpx` or `requests` to these APIs:
       }}
   ```
 
+### User-Provided Third-Party API Credentials
+
+Users can store their own API keys and tokens for any third-party service. These are
+injected as environment variables at runtime. When planning a tool that needs a
+third-party API key (e.g., TikTok, Stripe, Shopify, GitHub, etc.):
+
+1. Include `os` in required_modules
+2. In implementation_approach, note which env vars are needed (e.g., TIKTOK_ACCESS_TOKEN)
+3. The env var names should be SCREAMING_SNAKE_CASE (e.g., STRIPE_API_KEY, GITHUB_TOKEN)
+
+The user sets these via `PUT /v1/tools/{{tool_id}}/secrets` after tool creation.
+
 When a capability requires search, external data, or prediction markets, use these APIs.
+When a capability requires a third-party service with authentication, plan to read
+credentials from environment variables using `os.environ.get("KEY_NAME")`.
 
 ## Output Format
 

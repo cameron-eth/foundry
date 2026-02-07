@@ -43,8 +43,16 @@ class SandboxExecutor(ABC):
         implementation: str,
         input_data: Dict[str, Any],
         timeout_seconds: int = 30,
+        extra_env: Optional[Dict[str, str]] = None,
     ) -> ExecutionResult:
-        """Execute tool code with input data."""
+        """Execute tool code with input data.
+        
+        Args:
+            implementation: Python source code with a main() function.
+            input_data: Keyword arguments passed to main().
+            timeout_seconds: Maximum execution time.
+            extra_env: Additional env vars to inject (e.g., user secrets).
+        """
         ...
 
 
@@ -131,6 +139,7 @@ class RestrictedExecExecutor(SandboxExecutor):
         implementation: str,
         input_data: Dict[str, Any],
         timeout_seconds: int = 30,
+        extra_env: Optional[Dict[str, str]] = None,
     ) -> ExecutionResult:
         """Execute tool code using exec with full imports.
         
@@ -139,7 +148,15 @@ class RestrictedExecExecutor(SandboxExecutor):
         we can use regular exec with full import capability.
         """
         import builtins
+        import os as _os
         start_time = time.perf_counter()
+
+        # Inject user secrets as env vars for the duration of execution
+        _prev_env: Dict[str, Optional[str]] = {}
+        if extra_env:
+            for k, v in extra_env.items():
+                _prev_env[k] = _os.environ.get(k)
+                _os.environ[k] = v
 
         try:
             # Use a single dict for both globals and locals
@@ -176,6 +193,15 @@ class RestrictedExecExecutor(SandboxExecutor):
                 error=str(e),
                 execution_time_ms=elapsed_ms,
             )
+        finally:
+            # Restore previous env state — never leak user secrets
+            if extra_env:
+                for k in extra_env:
+                    prev = _prev_env.get(k)
+                    if prev is None:
+                        _os.environ.pop(k, None)
+                    else:
+                        _os.environ[k] = prev
 
 
 class ModalSandboxExecutor(SandboxExecutor):
@@ -227,6 +253,7 @@ class ModalSandboxExecutor(SandboxExecutor):
         implementation: str,
         input_data: Dict[str, Any],
         timeout_seconds: Optional[int] = None,
+        extra_env: Optional[Dict[str, str]] = None,
     ) -> ExecutionResult:
         """Execute tool code in Modal Sandbox."""
         import modal
@@ -252,15 +279,19 @@ if __name__ == "__main__":
     print(json.dumps({{"success": True, "result": result}}))
 '''
 
-            # Collect API keys from environment to pass to sandbox
+            # Collect platform API keys from environment
             import os as _os
             env_vars = {}
-            for key in ["EXA_API_KEY", "ANTHROPIC_API_KEY"]:
+            for key in ["EXA_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"]:
                 val = _os.environ.get(key)
                 if val:
                     env_vars[key] = val
 
-            # Create sandbox with environment variables
+            # Merge in user-provided secrets (these take priority)
+            if extra_env:
+                env_vars.update(extra_env)
+
+            # Create sandbox with all environment variables
             sandbox = modal.Sandbox.create(
                 image=self._get_sandbox_image(),
                 timeout=timeout,

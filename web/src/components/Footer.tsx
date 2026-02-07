@@ -36,8 +36,8 @@ export default function Footer() {
           {/* Brand */}
           <div className="col-span-2 md:col-span-4 lg:col-span-1 mb-8 lg:mb-0">
             <Link href="/" className="inline-block mb-4">
-              <span 
-                className="text-2xl text-white italic"
+              <span
+                className="text-2xl tracking-tight text-white"
                 style={{ fontFamily: "var(--font-instrument), Georgia, serif" }}
               >
                 Foundry

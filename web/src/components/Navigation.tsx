@@ -8,18 +8,10 @@ import Link from "next/link";
 
 const API_URL = "https://camfleety--toolfoundry-serve.modal.run";
 
-const resources = [
-  { name: "Documentation", href: `${API_URL}/docs`, description: "API reference and guides" },
-  { name: "Examples", href: "#demo", description: "See Foundry in action" },
-  { name: "Blog", href: "/blog", description: "Latest updates and tutorials" },
-];
-
-const useCases = [
-  { name: "Healthcare" },
-  { name: "Finance" },
-  { name: "Creative" },
-  { name: "Research" },
-  { name: "Enterprise" },
+const developers = [
+  { name: "API Reference", href: "/api-reference", description: "Full endpoint documentation" },
+  { name: "Interactive Docs", href: `${API_URL}/docs`, description: "Try endpoints in the browser" },
+  { name: "Blog", href: "/blog", description: "Updates and tutorials" },
 ];
 
 export default function Navigation() {
@@ -49,16 +41,20 @@ export default function Navigation() {
         <div className="flex items-center justify-between h-16 lg:h-20">
           {/* Logo */}
           <Link href="/" className="flex items-center">
-            <motion.span
-              className={`text-2xl tracking-tight italic transition-colors ${
-                scrolled ? "text-white" : "text-gray-900"
-              }`}
-              style={{ fontFamily: "var(--font-instrument), Georgia, serif" }}
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
+            <motion.div
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+              className="relative"
             >
-              Foundry
-            </motion.span>
+              <span
+                className={`text-2xl tracking-tight transition-colors duration-300 ${
+                  scrolled ? "text-white" : "text-gray-900"
+                }`}
+                style={{ fontFamily: "var(--font-instrument), Georgia, serif" }}
+              >
+                Foundry
+              </span>
+            </motion.div>
           </Link>
 
           {/* Desktop Navigation */}
@@ -72,14 +68,14 @@ export default function Navigation() {
               Pricing
             </Link>
 
-            {/* Resources Dropdown */}
+            {/* Developers Dropdown */}
             <Menu as="div" className="relative">
               {({ open }) => (
                 <>
                   <Menu.Button className={`flex items-center gap-1 px-4 py-2 text-sm font-medium uppercase tracking-wider transition-colors ${
                     scrolled ? "text-white hover:text-white/80" : "text-gray-700 hover:text-gray-900"
                   }`}>
-                    Resources
+                    Developers
                     <ChevronDownIcon
                       className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`}
                     />
@@ -95,7 +91,7 @@ export default function Navigation() {
                   >
                     <Menu.Items className="absolute left-0 mt-2 w-72 origin-top-left bg-[#0a0a0f] border border-white/[0.08] rounded-none shadow-2xl overflow-hidden focus:outline-none">
                       <div>
-                        {resources.map((item, index) => (
+                        {developers.map((item) => (
                           <Menu.Item key={item.name}>
                             {({ active }) => (
                               <a
@@ -122,85 +118,18 @@ export default function Navigation() {
               )}
             </Menu>
 
-            {/* Use Cases Dropdown */}
-            <Menu as="div" className="relative">
-              {({ open }) => (
-                <>
-                  <Menu.Button className={`flex items-center gap-1 px-4 py-2 text-sm font-medium uppercase tracking-wider transition-colors ${
-                    scrolled ? "text-white hover:text-white/80" : "text-gray-700 hover:text-gray-900"
-                  }`}>
-                    Use Cases
-                    <ChevronDownIcon
-                      className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`}
-                    />
-                  </Menu.Button>
-                  <Transition
-                    as={Fragment}
-                    enter="transition ease-out duration-200"
-                    enterFrom="opacity-0 translate-y-2"
-                    enterTo="opacity-100 translate-y-0"
-                    leave="transition ease-in duration-150"
-                    leaveFrom="opacity-100 translate-y-0"
-                    leaveTo="opacity-0 translate-y-2"
-                  >
-                    <Menu.Items className="absolute left-0 mt-2 w-56 origin-top-left bg-[#0a0a0f] border border-white/[0.08] rounded-none shadow-2xl overflow-hidden focus:outline-none">
-                      <div>
-                        {useCases.map((item) => (
-                          <Menu.Item key={item.name}>
-                            {({ active }) => (
-                              <a
-                                href="#"
-                                className={`block px-6 py-4 transition-colors border-b border-white/[0.08] last:border-b-0 ${
-                                  active ? "bg-white/[0.03]" : ""
-                                }`}
-                              >
-                                <span 
-                                  className="text-white text-lg"
-                                  style={{ fontFamily: "var(--font-instrument), Georgia, serif" }}
-                                >
-                                  {item.name}
-                                </span>
-                              </a>
-                            )}
-                          </Menu.Item>
-                        ))}
-                      </div>
-                    </Menu.Items>
-                  </Transition>
-                </>
-              )}
-            </Menu>
-
-            <a
-              href={`${API_URL}/docs`}
-              className={`px-4 py-2 text-sm font-medium uppercase tracking-wider transition-colors ${
-                scrolled ? "text-white hover:text-white/80" : "text-gray-700 hover:text-gray-900"
-              }`}
-            >
-              Docs
-            </a>
-
-            <Link
-              href="/api-reference"
-              className={`px-4 py-2 text-sm font-medium uppercase tracking-wider transition-colors ${
-                scrolled ? "text-white hover:text-white/80" : "text-gray-700 hover:text-gray-900"
-              }`}
-            >
-              API Reference
-            </Link>
-
             {/* CTA Buttons */}
             <div className="flex items-center gap-2 ml-4">
-              <a
-                href="#"
+              <Link
+                href="/login"
                 className={`px-4 py-2 text-sm font-medium uppercase tracking-wider transition-colors ${
                   scrolled ? "text-white hover:text-white/80" : "text-gray-700 hover:text-gray-900"
                 }`}
               >
                 Login
-              </a>
+              </Link>
               <motion.a
-                href={`${API_URL}/docs`}
+                href="/signup"
                 className={`px-4 py-2 text-sm font-medium uppercase tracking-wider border transition-colors ${
                   scrolled 
                     ? "text-white border-white/50 hover:border-white" 
@@ -237,30 +166,35 @@ export default function Navigation() {
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
-            className="lg:hidden bg-white border-t border-gray-200"
+            className="lg:hidden bg-black/95 backdrop-blur-xl border-t border-white/10"
           >
             <div className="px-4 py-6 space-y-4">
-              <Link href="/pricing" className="block text-gray-900 py-2 font-medium uppercase tracking-wider text-sm">
+              <Link href="/pricing" className="block text-white py-2 font-medium uppercase tracking-wider text-sm">
                 Pricing
               </Link>
-              <a href="#features" className="block text-gray-900 py-2 font-medium uppercase tracking-wider text-sm">
-                Features
-              </a>
-              <a href="#demo" className="block text-gray-900 py-2 font-medium uppercase tracking-wider text-sm">
-                Demo
-              </a>
-              <a href={`${API_URL}/docs`} className="block text-gray-900 py-2 font-medium uppercase tracking-wider text-sm">
-                Docs
-              </a>
-              <Link href="/api-reference" className="block text-gray-900 py-2 font-medium uppercase tracking-wider text-sm">
+              <Link href="/api-reference" className="block text-white py-2 font-medium uppercase tracking-wider text-sm">
                 API Reference
               </Link>
-              <a
-                href={`${API_URL}/docs`}
-                className="block w-full text-center bg-rose-500 text-white py-3 font-semibold uppercase tracking-wider text-sm mt-4"
-              >
-                Try Free
+              <a href={`${API_URL}/docs`} className="block text-white py-2 font-medium uppercase tracking-wider text-sm">
+                Interactive Docs
               </a>
+              <Link href="/blog" className="block text-white py-2 font-medium uppercase tracking-wider text-sm">
+                Blog
+              </Link>
+              <div className="pt-4 border-t border-white/10 flex gap-3">
+                <Link
+                  href="/login"
+                  className="flex-1 text-center text-white py-3 font-medium uppercase tracking-wider text-sm border border-white/20"
+                >
+                  Login
+                </Link>
+                <Link
+                  href="/signup"
+                  className="flex-1 text-center bg-rose-500 text-white py-3 font-semibold uppercase tracking-wider text-sm"
+                >
+                  Sign Up
+                </Link>
+              </div>
             </div>
           </motion.div>
         )}

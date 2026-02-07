@@ -155,6 +155,42 @@ def main(search_term: str, limit: int = 5) -> dict:
     }}
 ```
 
+## User-Provided API Credentials
+
+Users can store their own API keys/tokens for third-party services. These are injected
+as environment variables at runtime. ALWAYS access them via `os.environ.get("KEY_NAME")`.
+
+Common patterns:
+- `os.environ.get("TIKTOK_ACCESS_TOKEN")` - TikTok API
+- `os.environ.get("STRIPE_API_KEY")` - Stripe API
+- `os.environ.get("SHOPIFY_ACCESS_TOKEN")` - Shopify API
+- `os.environ.get("GITHUB_TOKEN")` - GitHub API
+- Any custom key the user configures for their tool
+
+Example for a tool that uses a user-provided API key:
+```python
+import httpx
+import os
+
+def main(query: str) -> dict:
+    api_key = os.environ.get("MY_SERVICE_API_KEY")
+    if not api_key:
+        return {{"error": "MY_SERVICE_API_KEY not configured. Set it via PUT /v1/tools/{{tool_id}}/secrets"}}
+    
+    response = httpx.get(
+        "https://api.example.com/data",
+        headers={{"Authorization": f"Bearer {{api_key}}"}},
+        params={{"q": query}},
+        timeout=30.0
+    )
+    response.raise_for_status()
+    return response.json()
+```
+
+When the user's request involves a third-party API that requires authentication,
+generate code that reads credentials from environment variables and include a helpful
+error message if the credential is missing.
+
 ## Visualization with Matplotlib
 
 You CAN use `matplotlib` for generating charts/plots. Return images as base64-encoded strings.

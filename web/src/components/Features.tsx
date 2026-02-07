@@ -43,8 +43,39 @@ const features = [
 
 export default function Features() {
   return (
-    <section id="features" className="py-24 lg:py-32 bg-gray-950">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <section id="features" className="relative py-24 lg:py-32 bg-gray-950 overflow-hidden">
+      {/* Gradient Background */}
+      <div 
+        className="absolute inset-0 opacity-15"
+        style={{
+          background: `
+            radial-gradient(
+              ellipse 80% 60% at 50% 50%,
+              #4c1d95 0%,
+              #2d1b4e 40%,
+              transparent 70%
+            )
+          `,
+        }}
+      />
+      
+      {/* Radiating Lines */}
+      <div 
+        className="absolute inset-0 opacity-20"
+        style={{
+          background: `
+            repeating-conic-gradient(
+              from 0deg at 50% 50%,
+              transparent 0deg,
+              transparent 1.5deg,
+              rgba(255,255,255,0.02) 1.5deg,
+              rgba(255,255,255,0.02) 3deg
+            )
+          `,
+        }}
+      />
+
+      <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}

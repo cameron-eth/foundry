@@ -1213,7 +1213,7 @@ async def rebuild_tool(
     "/{tool_id}/invoke",
     response_model=InvokeResponse,
     summary="Invoke tool",
-    description="Execute a tool with the provided input.",
+    description="Execute a tool with the provided input. Any secrets configured for this tool via PUT /v1/tools/{tool_id}/secrets are automatically injected as environment variables.",
 )
 async def invoke_tool(tool_id: str, request: InvokeRequest) -> InvokeResponse:
     """Execute a tool with the provided input."""
@@ -1237,6 +1237,17 @@ async def invoke_tool(tool_id: str, request: InvokeRequest) -> InvokeResponse:
 
     logger.info(f"Invoking tool {tool_id}")
 
+    # Fetch user-configured secrets for this tool
+    extra_env = {}
+    try:
+        from src.api.secrets import get_tool_secrets_decrypted
+        org_id = getattr(entry, "org_id", None) or "default"
+        extra_env = await get_tool_secrets_decrypted(tool_id, org_id)
+        if extra_env:
+            logger.info(f"Injecting {len(extra_env)} secret(s) for tool {tool_id}")
+    except Exception as e:
+        logger.warning(f"Failed to fetch secrets for tool {tool_id}: {e}")
+
     try:
         from src.builder.sandbox import get_executor
 
@@ -1245,6 +1256,7 @@ async def invoke_tool(tool_id: str, request: InvokeRequest) -> InvokeResponse:
             implementation=entry.implementation,
             input_data=request.input,
             timeout_seconds=30,
+            extra_env=extra_env if extra_env else None,
         )
 
         if not exec_result.success:
@@ -1758,11 +1770,13 @@ web_app.include_router(tools_router)
 web_app.include_router(execution_router)
 web_app.include_router(search_router)
 
-# Auth, keys, and usage routers
+# Auth, keys, usage, and secrets routers
 from src.api.keys import keys_router
 from src.api.usage import usage_router
+from src.api.secrets import secrets_router
 web_app.include_router(keys_router)
 web_app.include_router(usage_router)
+web_app.include_router(secrets_router)
 
 
 # =============================================================================

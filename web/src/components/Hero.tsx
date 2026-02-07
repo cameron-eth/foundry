@@ -136,7 +136,7 @@ export default function Hero() {
               Try It Free
             </motion.a>
             <motion.a
-              href={`${API_URL}/docs`}
+              href="/api-reference"
               className="px-4 py-4 text-gray-900 font-semibold tracking-wider uppercase text-sm hover:text-gray-600 transition-colors"
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
