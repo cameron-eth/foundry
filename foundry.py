@@ -70,6 +70,12 @@ try:
 except:
     exa_secret = modal.Secret.from_dict({"EXA_API_KEY": ""})
 
+# Optional: Neon Database (for auth, usage tracking, billing)
+try:
+    neon_secret = modal.Secret.from_name("neon-credentials")
+except:
+    neon_secret = modal.Secret.from_dict({"DATABASE_URL": ""})
+
 # Optional Event credentials (for event emission)
 optional_event_secret = modal.Secret.from_dict({
     "FOUNDRY_EVENT_API_URL": "",
@@ -79,7 +85,7 @@ optional_event_secret = modal.Secret.from_dict({
 
 @app.function(
     image=foundry_image,
-    secrets=[anthropic_secret, openai_secret, brave_secret, exa_secret, optional_event_secret, branding_secret],
+    secrets=[anthropic_secret, openai_secret, brave_secret, exa_secret, neon_secret, optional_event_secret, branding_secret],
     timeout=300,
     memory=512,
 )

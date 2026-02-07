@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 import { motion } from "framer-motion";
 
 const integrations = [
@@ -242,7 +242,7 @@ export default function TrustBanner() {
 }
 
 // Simple syntax highlighting
-function highlightCode(line: string): JSX.Element {
+function highlightCode(line: string): React.ReactElement {
   // Keywords
   const keywords = ['import', 'from', 'const', 'let', 'var', 'await', 'async', 'def', 'class', 'return', 'if', 'else', 'for', 'while', 'try', 'catch', 'export', 'default'];
   // Built-ins
@@ -256,7 +256,7 @@ function highlightCode(line: string): JSX.Element {
   }
   
   // Check for strings
-  const parts: JSX.Element[] = [];
+  const parts: React.ReactElement[] = [];
   let currentIndex = 0;
   const stringRegex = /(["'`])(?:(?!\1)[^\\]|\\.)*\1/g;
   let match;
@@ -291,7 +291,7 @@ function highlightCode(line: string): JSX.Element {
   return <>{parts.length > 0 ? parts : highlightNonString(line)}</>;
 }
 
-function highlightNonString(text: string): JSX.Element {
+function highlightNonString(text: string): React.ReactElement {
   const keywords = ['import', 'from', 'const', 'let', 'var', 'await', 'async', 'def', 'class', 'return', 'if', 'else', 'for', 'while', 'try', 'catch', 'export', 'default', 'curl', '-X', '-H', '-d'];
   const builtins = ['print', 'console', 'os', 'process', 'POST', 'GET'];
   

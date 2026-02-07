@@ -1758,6 +1758,12 @@ web_app.include_router(tools_router)
 web_app.include_router(execution_router)
 web_app.include_router(search_router)
 
+# Auth, keys, and usage routers
+from src.api.keys import keys_router
+from src.api.usage import usage_router
+web_app.include_router(keys_router)
+web_app.include_router(usage_router)
+
 
 # =============================================================================
 # Legacy Exports for Tests
