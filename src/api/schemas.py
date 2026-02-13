@@ -34,8 +34,8 @@ class CreateToolRequest(BaseModel):
         description="Pip packages to install (from allowlist only)",
     )
     ttl_hours: int = Field(default=24, ge=1, le=168, description="Time to live in hours")
-    org_id: str = Field(..., description="Organization ID for scoping")
-    conversation_id: str = Field(..., description="Conversation ID for system events")
+    org_id: Optional[str] = Field(default=None, description="Organization ID for scoping")
+    conversation_id: Optional[str] = Field(default=None, description="Conversation ID for system events")
 
 
 class CreateCapabilityRequest(BaseModel):
@@ -53,8 +53,8 @@ class CreateCapabilityRequest(BaseModel):
         max_length=5000,
     )
     ttl_hours: int = Field(default=24, ge=1, le=168, description="Time to live in hours")
-    org_id: str = Field(..., description="Organization ID for scoping")
-    conversation_id: str = Field(..., description="Conversation ID for system events")
+    org_id: Optional[str] = Field(default=None, description="Organization ID for scoping")
+    conversation_id: Optional[str] = Field(default=None, description="Conversation ID for system events")
     async_build: bool = Field(
         default=True,
         description="If True, return immediately and emit event when ready",
@@ -158,8 +158,8 @@ class ToolRegistryEntry(BaseModel):
     """Internal registry entry for a tool."""
 
     tool_id: str
-    org_id: str
-    conversation_id: str
+    org_id: Optional[str] = None
+    conversation_id: Optional[str] = None
     name: str
     description: str
     status: ToolStatus

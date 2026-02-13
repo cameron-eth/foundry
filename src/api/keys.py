@@ -1,13 +1,13 @@
 """API key management endpoints.
 
-Handles creating, listing, and revoking API keys.
-Called from the Next.js dashboard via server-side API routes.
+Handles creating, listing, revoking API keys, and new user registration.
 """
 
 from __future__ import annotations
 
 import secrets
 import hashlib
+import uuid
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Depends
@@ -20,6 +20,26 @@ from src.infra.logging import get_logger
 logger = get_logger("api.keys")
 
 keys_router = APIRouter(prefix="/v1/keys", tags=["API Keys"])
+
+
+# ---------------------------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------------------------
+
+class RegisterRequest(BaseModel):
+    """Register a new organization and get your first API key."""
+    org_name: str = Field(description="Your organization or project name")
+    email: Optional[str] = Field(default=None, description="Contact email (optional)")
+    plan: str = Field(default="free", description="Billing plan: free, pro, scale")
+
+
+class RegisterResponse(BaseModel):
+    org_id: str
+    org_name: str
+    api_key: str = Field(description="Your API key (save this — shown only once)")
+    key_prefix: str
+    plan: str
+    message: str
 
 
 class CreateKeyRequest(BaseModel):
@@ -164,3 +184,95 @@ async def revoke_api_key(
     logger.info(f"Revoked API key {key_id} for org {auth.org_id}")
     
     return {"message": "API key revoked", "key_id": key_id}
+
+
+# ---------------------------------------------------------------------------
+# Public Registration (no auth required)
+# ---------------------------------------------------------------------------
+
+@keys_router.post("/register", response_model=RegisterResponse)
+async def register(request: RegisterRequest):
+    """Register a new organization and receive your first API key.
+    
+    This is the only endpoint that does not require authentication.
+    Save the returned API key — it is shown only once.
+    """
+    db = get_db()
+    
+    if not db.is_configured:
+        raise HTTPException(status_code=503, detail="Database not configured")
+    
+    # Validate plan
+    valid_plans = {"free", "pro", "scale"}
+    if request.plan not in valid_plans:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid plan '{request.plan}'. Choose from: {', '.join(sorted(valid_plans))}",
+        )
+    
+    # Check for duplicate org name (slug)
+    slug = request.org_name.lower().strip().replace(" ", "-")[:50]
+    existing = await db.execute_one(
+        "SELECT id FROM organizations WHERE slug = $1",
+        [slug],
+    )
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Organization '{request.org_name}' already exists. Use a different name or contact support.",
+        )
+    
+    # Look up plan limits
+    plan_row = await db.execute_one(
+        """
+        SELECT monthly_builds, monthly_invocations, monthly_searches, concurrent_tools
+        FROM billing_plans WHERE id = $1
+        """,
+        [request.plan],
+    )
+    
+    if not plan_row:
+        raise HTTPException(status_code=500, detail="Plan configuration not found")
+    
+    org_id = str(uuid.uuid4())
+    
+    # Create organization
+    await db.execute(
+        """
+        INSERT INTO organizations (id, name, slug, plan, monthly_build_limit, 
+                                   monthly_invoke_limit, monthly_search_limit, concurrent_tools_limit)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        """,
+        [
+            org_id,
+            request.org_name.strip(),
+            slug,
+            request.plan,
+            plan_row["monthly_builds"],
+            plan_row["monthly_invocations"],
+            plan_row["monthly_searches"],
+            plan_row["concurrent_tools"],
+        ],
+    )
+    
+    # Generate first API key
+    full_key, prefix, key_hash = generate_api_key()
+    
+    await db.execute(
+        """
+        INSERT INTO api_keys (org_id, name, key_prefix, key_hash, scopes)
+        VALUES ($1, $2, $3, $4, ARRAY['tools:create','tools:invoke','tools:read','search'])
+        """,
+        [org_id, "Default Key", prefix, key_hash],
+    )
+    
+    logger.info(f"Registered new org '{request.org_name}' ({org_id}) on plan '{request.plan}'")
+    
+    return RegisterResponse(
+        org_id=org_id,
+        org_name=request.org_name.strip(),
+        api_key=full_key,
+        key_prefix=prefix,
+        plan=request.plan,
+        message=f"Welcome to Foundry! Save your API key — it won't be shown again.",
+    )

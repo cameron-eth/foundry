@@ -37,7 +37,8 @@ from src.api.schemas import (
 from src.builder.validator import validate_restricted_python
 from src.infra.config import get_settings
 from src.infra.logging import get_logger, setup_logging
-from src.infra.secrets import get_anthropic_api_key
+from src.infra.secrets import get_anthropic_api_key, has_llm_provider
+from src.api.auth import AuthContext, validate_api_key, require_auth, track_usage, check_usage_limit
 
 # Setup logging on import
 setup_logging()
@@ -74,65 +75,10 @@ def get_registry() -> RegistryBase:
 
 
 # =============================================================================
-# API Key Authentication
+# API Key Authentication (DB-backed via src.api.auth)
 # =============================================================================
-
-# API key header scheme
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-# Valid API keys (loaded from environment)
-_valid_api_keys: Optional[set] = None
-
-
-def _get_valid_api_keys() -> set:
-    """Load valid API keys from environment."""
-    global _valid_api_keys
-    if _valid_api_keys is not None:
-        return _valid_api_keys
-
-    import os
-    keys_str = os.environ.get("TOOLFOUNDRY_API_KEYS", "")
-    if keys_str:
-        _valid_api_keys = set(k.strip() for k in keys_str.split(",") if k.strip())
-    else:
-        _valid_api_keys = set()
-
-    return _valid_api_keys
-
-
-def _is_auth_enabled() -> bool:
-    """Check if API key auth is enabled."""
-    import os
-    return os.environ.get("TOOLFOUNDRY_REQUIRE_AUTH", "false").lower() == "true"
-
-
-async def verify_api_key(api_key: Optional[str] = Security(api_key_header)) -> Optional[str]:
-    """Verify the API key if authentication is enabled."""
-    if not _is_auth_enabled():
-        return None  # Auth disabled, allow all
-
-    if not api_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Missing API key. Provide X-API-Key header.",
-        )
-
-    valid_keys = _get_valid_api_keys()
-    if not valid_keys:
-        logger.warning("Auth enabled but no API keys configured")
-        raise HTTPException(
-            status_code=500,
-            detail="Server misconfigured: no API keys set",
-        )
-
-    if api_key not in valid_keys:
-        raise HTTPException(
-            status_code=403,
-            detail="Invalid API key",
-        )
-
-    return api_key
-    return _registry_instance
+# Auth is handled by validate_api_key (optional) and require_auth (mandatory)
+# imported from src.api.auth. These look up hashed keys in Postgres.
 
 
 # In-memory build requests tracking
@@ -659,32 +605,13 @@ async def custom_redoc_html():
 # Health router (no version prefix, no auth required)
 health_router = APIRouter(tags=["health"])
 
-# V1 API routers (auth required when enabled)
-construct_router = APIRouter(
-    prefix="/v1/construct",
-    tags=["construct"],
-    dependencies=[Depends(verify_api_key)],
-)
-tools_router = APIRouter(
-    prefix="/v1/tools",
-    tags=["tools"],
-    dependencies=[Depends(verify_api_key)],
-)
-execution_router = APIRouter(
-    prefix="/v1/tools",
-    tags=["execution"],
-    dependencies=[Depends(verify_api_key)],
-)
-builds_router = APIRouter(
-    prefix="/v1/builds",
-    tags=["construct"],
-    dependencies=[Depends(verify_api_key)],
-)
-search_router = APIRouter(
-    prefix="/v1/search",
-    tags=["search"],
-    dependencies=[Depends(verify_api_key)],
-)
+# V1 API routers — auth validated per-handler via Depends(validate_api_key)
+# so we can track usage with the auth context
+construct_router = APIRouter(prefix="/v1/construct", tags=["construct"])
+tools_router = APIRouter(prefix="/v1/tools", tags=["tools"])
+execution_router = APIRouter(prefix="/v1/tools", tags=["execution"])
+builds_router = APIRouter(prefix="/v1/builds", tags=["construct"])
+search_router = APIRouter(prefix="/v1/search", tags=["search"])
 
 
 # =============================================================================
@@ -830,19 +757,26 @@ async def _build_capability_async(
 async def create_capability(
     request: CreateCapabilityRequest,
     background_tasks: BackgroundTasks,
+    auth: Optional[AuthContext] = Depends(validate_api_key),
 ) -> CreateCapabilityResponse:
     """Create a tool from a capability description using the AI agent."""
     request_id = f"req-{uuid.uuid4().hex[:12]}"
     base_url = get_base_url()
 
-    if not get_anthropic_api_key():
+    # Check usage limit if authenticated
+    if auth:
+        await check_usage_limit(auth, "tool_build")
+
+    if not has_llm_provider():
         return CreateCapabilityResponse(
             request_id=request_id,
             status="failed",
-            message="Agent not available: Anthropic API key not configured",
+            message="Agent not available: No LLM provider configured (set OPENAI_API_KEY or ANTHROPIC_API_KEY)",
         )
 
     settings = get_settings()
+    # Use org_id from auth context if available, fall back to request
+    org_id = (auth.org_id if auth else None) or request.org_id
 
     # Async build
     if request.async_build and settings.enable_async_builds:
@@ -863,16 +797,27 @@ async def create_capability(
         )
 
     # Synchronous build
+    start_time = time.time()
     try:
         agent = get_builder_agent()
         result = await agent.build_from_description(
             capability_description=request.capability_description,
             context=request.context,
-            org_id=request.org_id,
+            org_id=org_id,
             conversation_id=request.conversation_id,
         )
 
+        elapsed_ms = int((time.time() - start_time) * 1000)
+
         if not result.success:
+            # Track failed build
+            if auth:
+                background_tasks.add_task(
+                    track_usage, auth, "tool_build", tool_id=None,
+                    request_id=request_id, endpoint="/v1/construct",
+                    status_code=200, execution_time_ms=elapsed_ms,
+                    error=result.error,
+                )
             return CreateCapabilityResponse(
                 request_id=request_id,
                 status="failed",
@@ -884,7 +829,7 @@ async def create_capability(
 
         entry = ToolRegistryEntry(
             tool_id=tool_id,
-            org_id=request.org_id,
+            org_id=org_id,
             conversation_id=request.conversation_id,
             name=result.tool_name,
             description=result.tool_description,
@@ -898,6 +843,14 @@ async def create_capability(
         get_registry()[tool_id] = entry
         logger.info(f"Created tool from capability: {tool_id}")
 
+        # Track successful build
+        if auth:
+            background_tasks.add_task(
+                track_usage, auth, "tool_build", tool_id=tool_id,
+                request_id=request_id, endpoint="/v1/construct",
+                status_code=200, execution_time_ms=elapsed_ms,
+            )
+
         return CreateCapabilityResponse(
             request_id=request_id,
             tool_id=tool_id,
@@ -908,7 +861,15 @@ async def create_capability(
         )
 
     except Exception as e:
+        elapsed_ms = int((time.time() - start_time) * 1000)
         logger.error(f"Capability creation failed: {e}")
+        if auth:
+            background_tasks.add_task(
+                track_usage, auth, "tool_build", tool_id=None,
+                request_id=request_id, endpoint="/v1/construct",
+                status_code=500, execution_time_ms=elapsed_ms,
+                error=str(e),
+            )
         return CreateCapabilityResponse(
             request_id=request_id,
             status="failed",
@@ -953,10 +914,15 @@ async def get_build_status(request_id: str) -> BuildStatusResponse:
     summary="Create tool with code",
     description="Create a tool by providing Python implementation directly.",
 )
-async def create_tool(request: CreateToolRequest) -> CreateToolResponse:
+async def create_tool(
+    request: CreateToolRequest,
+    background_tasks: BackgroundTasks,
+    auth: Optional[AuthContext] = Depends(validate_api_key),
+) -> CreateToolResponse:
     """Create a tool by providing Python implementation directly."""
     tool_id = f"tool-{uuid.uuid4().hex[:12]}"
     base_url = get_base_url()
+    org_id = (auth.org_id if auth else None) or request.org_id
 
     # Validate the implementation
     try:
@@ -974,7 +940,7 @@ async def create_tool(request: CreateToolRequest) -> CreateToolResponse:
     expires_at = datetime.now(timezone.utc) + timedelta(hours=request.ttl_hours)
     entry = ToolRegistryEntry(
         tool_id=tool_id,
-        org_id=request.org_id,
+        org_id=org_id,
         conversation_id=request.conversation_id,
         name=request.name,
         description=request.description,
@@ -987,6 +953,13 @@ async def create_tool(request: CreateToolRequest) -> CreateToolResponse:
 
     get_registry()[tool_id] = entry
     logger.info(f"Created tool {tool_id}: {request.name}")
+
+    # Track usage
+    if auth:
+        background_tasks.add_task(
+            track_usage, auth, "tool_build", tool_id=tool_id,
+            endpoint="/v1/tools", status_code=200,
+        )
 
     return CreateToolResponse(
         tool_id=tool_id,
@@ -1002,13 +975,18 @@ async def create_tool(request: CreateToolRequest) -> CreateToolResponse:
     summary="List tools",
     description="List all tools, optionally filtered by organization.",
 )
-async def list_tools(org_id: Optional[str] = None) -> Dict[str, List[ToolManifest]]:
+async def list_tools(
+    org_id: Optional[str] = None,
+    auth: Optional[AuthContext] = Depends(validate_api_key),
+) -> Dict[str, List[ToolManifest]]:
     """List all tools, optionally filtered by org_id."""
     base_url = get_base_url()
     tools = []
+    # Use org from auth if available and no explicit filter
+    filter_org = org_id or (auth.org_id if auth else None)
 
     for entry in get_registry().values():
-        if org_id and entry.org_id != org_id:
+        if filter_org and entry.org_id != filter_org:
             continue
 
         if entry.expires_at and datetime.now(timezone.utc) > entry.expires_at:
@@ -1215,7 +1193,12 @@ async def rebuild_tool(
     summary="Invoke tool",
     description="Execute a tool with the provided input. Any secrets configured for this tool via PUT /v1/tools/{tool_id}/secrets are automatically injected as environment variables.",
 )
-async def invoke_tool(tool_id: str, request: InvokeRequest) -> InvokeResponse:
+async def invoke_tool(
+    tool_id: str,
+    request: InvokeRequest,
+    background_tasks: BackgroundTasks,
+    auth: Optional[AuthContext] = Depends(validate_api_key),
+) -> InvokeResponse:
     """Execute a tool with the provided input."""
     from src.api.schemas import ResultType, TypedResult
 
@@ -1235,13 +1218,17 @@ async def invoke_tool(tool_id: str, request: InvokeRequest) -> InvokeResponse:
             detail=f"Tool {tool_id} is not ready (status: {entry.status})",
         )
 
+    # Check usage limit if authenticated
+    if auth:
+        await check_usage_limit(auth, "tool_invoke")
+
     logger.info(f"Invoking tool {tool_id}")
 
     # Fetch user-configured secrets for this tool
     extra_env = {}
     try:
         from src.api.secrets import get_tool_secrets_decrypted
-        org_id = getattr(entry, "org_id", None) or "default"
+        org_id = (auth.org_id if auth else None) or getattr(entry, "org_id", None) or "default"
         extra_env = await get_tool_secrets_decrypted(tool_id, org_id)
         if extra_env:
             logger.info(f"Injecting {len(extra_env)} secret(s) for tool {tool_id}")
@@ -1261,6 +1248,13 @@ async def invoke_tool(tool_id: str, request: InvokeRequest) -> InvokeResponse:
 
         if not exec_result.success:
             logger.warning(f"Tool {tool_id} execution failed: {exec_result.error}")
+            if auth:
+                background_tasks.add_task(
+                    track_usage, auth, "tool_invoke", tool_id=tool_id,
+                    endpoint=f"/v1/tools/{tool_id}/invoke", status_code=200,
+                    execution_time_ms=exec_result.execution_time_ms,
+                    error=exec_result.error,
+                )
             return InvokeResponse(
                 success=False,
                 result_type=None,
@@ -1274,6 +1268,14 @@ async def invoke_tool(tool_id: str, request: InvokeRequest) -> InvokeResponse:
         raw = exec_result.result
         result_type, typed_result = _classify_result(raw)
 
+        # Track successful invocation
+        if auth:
+            background_tasks.add_task(
+                track_usage, auth, "tool_invoke", tool_id=tool_id,
+                endpoint=f"/v1/tools/{tool_id}/invoke", status_code=200,
+                execution_time_ms=exec_result.execution_time_ms,
+            )
+
         return InvokeResponse(
             success=True,
             result_type=result_type,
@@ -1285,6 +1287,12 @@ async def invoke_tool(tool_id: str, request: InvokeRequest) -> InvokeResponse:
 
     except Exception as e:
         logger.error(f"Tool {tool_id} invocation error: {e}")
+        if auth:
+            background_tasks.add_task(
+                track_usage, auth, "tool_invoke", tool_id=tool_id,
+                endpoint=f"/v1/tools/{tool_id}/invoke", status_code=500,
+                error=str(e),
+            )
         return InvokeResponse(
             success=False,
             result_type=None,
@@ -1339,9 +1347,14 @@ def _classify_result(raw: Any) -> tuple:
     response_model=InvokeResponse,
     include_in_schema=False,  # Hide from docs, keep for compatibility
 )
-async def invoke_tool_legacy(tool_id: str, request: InvokeRequest) -> InvokeResponse:
+async def invoke_tool_legacy(
+    tool_id: str,
+    request: InvokeRequest,
+    background_tasks: BackgroundTasks,
+    auth: Optional[AuthContext] = Depends(validate_api_key),
+) -> InvokeResponse:
     """Legacy invoke endpoint (use /invoke instead)."""
-    return await invoke_tool(tool_id, request)
+    return await invoke_tool(tool_id, request, background_tasks, auth)
 
 
 # Legacy manifest endpoint
@@ -1671,9 +1684,19 @@ Set `contents` to fetch and extract text from result pages:
 
 Results are deduplicated by URL and sorted by relevance score.""",
 )
-async def search_web(request: SearchRequest) -> SearchResponse:
+async def search_web(
+    request: SearchRequest,
+    background_tasks: BackgroundTasks,
+    auth: Optional[AuthContext] = Depends(validate_api_key),
+) -> SearchResponse:
     """Search the web with multi-query expansion for comprehensive results."""
     import asyncio
+
+    # Check usage limit if authenticated
+    if auth:
+        await check_usage_limit(auth, "search")
+
+    start_time = time.time()
 
     try:
         # Generate search queries
@@ -1738,6 +1761,16 @@ async def search_web(request: SearchRequest) -> SearchResponse:
             for item in unique_results
         ]
 
+        elapsed_ms = int((time.time() - start_time) * 1000)
+
+        # Track search usage
+        if auth:
+            background_tasks.add_task(
+                track_usage, auth, "search",
+                endpoint="/v1/search", status_code=200,
+                execution_time_ms=elapsed_ms,
+            )
+
         return SearchResponse(
             success=True,
             query=request.query,
@@ -1748,7 +1781,14 @@ async def search_web(request: SearchRequest) -> SearchResponse:
         )
 
     except Exception as e:
+        elapsed_ms = int((time.time() - start_time) * 1000)
         logger.error(f"Search error: {e}")
+        if auth:
+            background_tasks.add_task(
+                track_usage, auth, "search",
+                endpoint="/v1/search", status_code=500,
+                execution_time_ms=elapsed_ms, error=str(e),
+            )
         return SearchResponse(
             success=False,
             query=request.query,

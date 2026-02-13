@@ -97,6 +97,29 @@ def get_anthropic_api_key() -> Optional[str]:
     return key
 
 
+@lru_cache()
+def get_openai_api_key() -> Optional[str]:
+    """
+    Get OpenAI API key.
+
+    Set via Modal secrets:
+        modal secret create openai-credentials \
+            OPENAI_API_KEY=your-api-key
+
+    Returns:
+        API key if configured, None otherwise.
+    """
+    key = get_secret("OPENAI_API_KEY", required=False)
+    if not key:
+        logger.warning("OpenAI API key not configured")
+    return key
+
+
+def has_llm_provider() -> bool:
+    """Check if ANY LLM provider key is available (Anthropic OR OpenAI)."""
+    return bool(get_openai_api_key() or get_anthropic_api_key())
+
+
 def validate_required_secrets() -> bool:
     """
     Validate that all required secrets are present.

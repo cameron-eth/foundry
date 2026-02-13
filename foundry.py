@@ -26,6 +26,7 @@ foundry_image = (
         # LLM Provider SDKs (multi-model support)
         "anthropic>=0.18.0",  # Claude
         "openai>=1.0.0",      # GPT / Codex
+        "openai-agents>=0.8.0",  # OpenAI Agents SDK
         # Web search & scraping
         "duckduckgo-search>=6.0.0",
         "beautifulsoup4>=4.12.0",
