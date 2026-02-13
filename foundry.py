@@ -8,6 +8,7 @@ Serve locally with: modal serve foundry.py
 
 from __future__ import annotations
 
+import os
 import modal
 
 # Create the Modal app
@@ -58,6 +59,13 @@ anthropic_secret = modal.Secret.from_name("anthropic-credentials")
 openai_secret = modal.Secret.from_name("openai-credentials")
 branding_secret = modal.Secret.from_name("foundry-branding")
 
+# Production hardening flags
+# Set FOUNDRY_REQUIRE_AUTH=true to reject unauthenticated API requests
+hardening_secret = modal.Secret.from_dict({
+    "FOUNDRY_REQUIRE_AUTH": os.environ.get("FOUNDRY_REQUIRE_AUTH", "true"),
+    "FOUNDRY_ENVIRONMENT": "production",
+})
+
 # Search API credentials (Brave Search - free tier: 2000 queries/month)
 # Get your API key at: https://brave.com/search/api/
 try:
@@ -86,7 +94,7 @@ optional_event_secret = modal.Secret.from_dict({
 
 @app.function(
     image=foundry_image,
-    secrets=[anthropic_secret, openai_secret, brave_secret, exa_secret, neon_secret, optional_event_secret, branding_secret],
+    secrets=[anthropic_secret, openai_secret, brave_secret, exa_secret, neon_secret, optional_event_secret, branding_secret, hardening_secret],
     timeout=300,
     memory=512,
 )

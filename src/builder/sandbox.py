@@ -60,9 +60,11 @@ class RestrictedExecExecutor(SandboxExecutor):
     """
     Execute tools using restricted exec().
 
-    This is used for local development and testing.
-    It provides some safety via restricted builtins but is NOT
-    suitable for production use with untrusted code.
+    This is used for LOCAL DEVELOPMENT AND TESTING ONLY.
+    It provides some safety via restricted builtins and AST validation
+    but is NOT suitable for production use with untrusted code.
+
+    In production (Modal), ModalSandboxExecutor must be used instead.
     """
 
     def __init__(self):
@@ -351,26 +353,49 @@ def create_executor() -> SandboxExecutor:
     """
     Create the appropriate executor based on settings.
 
+    **Security model:**
+    - In Modal (MODAL_ENVIRONMENT is set) → ModalSandboxExecutor (true isolation).
+    - Locally without Modal → RestrictedExecExecutor (dev-only, NOT safe for
+      untrusted code).
+    - In Modal but modal import fails → REFUSE to create executor.  We never
+      fall back to ``exec()`` in a production environment.
+
     Returns:
         SandboxExecutor instance.
     """
     import os as _os
     settings = get_settings()
+    in_modal = bool(_os.environ.get("MODAL_ENVIRONMENT"))
 
-    # Only use Modal Sandbox when running inside Modal
-    if settings.enable_sandbox_execution and _os.environ.get("MODAL_ENVIRONMENT"):
+    if settings.enable_sandbox_execution and in_modal:
         try:
             import modal  # noqa: F401
-            logger.info("Using Modal Sandbox executor")
+            logger.info("Using Modal Sandbox executor (production isolation)")
             return ModalSandboxExecutor(
                 timeout_seconds=settings.tool_timeout_seconds,
                 memory_mb=settings.tool_memory_mb,
                 cpu=settings.tool_cpu,
             )
         except ImportError:
-            logger.warning("Modal not available, falling back to restricted exec")
+            # FAIL CLOSED: never allow exec() fallback in production
+            logger.critical(
+                "CRITICAL: Running inside Modal but 'modal' package unavailable. "
+                "Refusing to fall back to unrestricted exec(). "
+                "Tool invocation is DISABLED until this is resolved."
+            )
+            raise RuntimeError(
+                "Sandbox executor unavailable: modal package missing in production. "
+                "Cannot fall back to exec() for security reasons."
+            )
 
-    logger.info("Using restricted exec executor")
+    if in_modal:
+        # We're on Modal but sandbox is explicitly disabled — warn loudly
+        logger.warning(
+            "Sandbox execution is DISABLED in Modal. Tool execution uses "
+            "RestrictedExec which is NOT secure for untrusted code."
+        )
+
+    logger.info("Using restricted exec executor (local dev mode)")
     return RestrictedExecExecutor()
 
 

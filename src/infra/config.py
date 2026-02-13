@@ -79,6 +79,18 @@ class Settings(BaseModel):
     rate_limit_requests_per_minute: int = Field(default=60, ge=1)
     rate_limit_tools_per_hour: int = Field(default=100, ge=1)
 
+    # Auth hardening
+    require_auth: bool = Field(
+        default=False,
+        description="When True, all protected routes require a valid API key. "
+                    "Set FOUNDRY_REQUIRE_AUTH=true in production.",
+    )
+    cors_origins: str = Field(
+        default="http://localhost:3000",
+        description="Comma-separated list of allowed CORS origins. "
+                    "Set FOUNDRY_CORS_ORIGINS in production.",
+    )
+
     # Agent configuration
     agent_model: str = Field(
         default="claude-sonnet-4-20250514",

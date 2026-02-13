@@ -11,9 +11,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, APIRouter, Depends, Header, Security
+from fastapi import FastAPI, HTTPException, BackgroundTasks, APIRouter, Depends, Header, Security, Request
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.security import APIKeyHeader
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.schemas import (
     BuildStatusResponse,
@@ -493,6 +494,50 @@ web_app = FastAPI(
         },
     ],
 )
+
+
+# =============================================================================
+# CORS & Security Middleware
+# =============================================================================
+
+import os as _os
+
+_allowed_origins = [
+    origin.strip()
+    for origin in _os.environ.get(
+        "FOUNDRY_CORS_ORIGINS",
+        # Default: allow localhost dev + Vercel + custom domain
+        "http://localhost:3000,http://localhost:3001,"
+        "https://foundry.ai,https://www.foundry.ai,"
+        "https://*.vercel.app,"
+        "https://camfleety--toolfoundry-serve.modal.run",
+    ).split(",")
+    if origin.strip()
+]
+
+web_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=[
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset",
+        "Retry-After",
+    ],
+)
+
+
+@web_app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Add security headers to every response."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
 
 
 # =============================================================================
@@ -1487,7 +1532,12 @@ async def search_brave(query: str, num_results: int = 10) -> list[dict]:
 
 
 async def search_duckduckgo_fallback(query: str, num_results: int = 10) -> list[dict]:
-    """Fallback search using DuckDuckGo library."""
+    """Fallback search using DuckDuckGo library.
+    
+    NOTE: DuckDuckGo and Google scraping often fail from cloud IPs.
+    If all providers fail, we return an empty list with a log warning
+    instead of silently returning nothing.
+    """
     import asyncio
     
     results = []
@@ -1514,7 +1564,14 @@ async def search_duckduckgo_fallback(query: str, num_results: int = 10) -> list[
     except Exception as e:
         logger.warning(f"DuckDuckGo search failed for '{query}': {e}")
         # Try Google scraping as last resort
-        return await scrape_google(query, num_results)
+        results = await scrape_google(query, num_results)
+    
+    if not results:
+        logger.warning(
+            f"All search providers returned 0 results for '{query}'. "
+            "This may be caused by search engines blocking cloud IPs. "
+            "Configure a valid BRAVE_API_KEY for reliable results."
+        )
     
     return results
 
@@ -1771,13 +1828,22 @@ async def search_web(
                 execution_time_ms=elapsed_ms,
             )
 
+        # Warn the caller if we got no results (likely cloud IP blocking)
+        search_error = None
+        if len(results) == 0:
+            search_error = (
+                "No results found. If running on cloud infrastructure, search engines "
+                "may be blocking requests. Ensure a valid BRAVE_API_KEY is configured."
+            )
+
         return SearchResponse(
-            success=True,
+            success=len(results) > 0,
             query=request.query,
             generated_queries=search_queries if len(search_queries) > 1 else None,
             results=results,
             num_results=len(results),
             num_searches_performed=len(search_queries),
+            error=search_error,
         )
 
     except Exception as e:
