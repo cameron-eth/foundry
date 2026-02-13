@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Menu, Transition } from "@headlessui/react";
 import { ChevronDownIcon, Bars3Icon, XMarkIcon } from "@heroicons/react/24/outline";
 import Link from "next/link";
+import { isAuthenticated } from "@/lib/api";
 
 const API_URL = "https://camfleety--toolfoundry-serve.modal.run";
 
@@ -17,8 +18,10 @@ const developers = [
 export default function Navigation() {
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [authed, setAuthed] = useState(false);
 
   useEffect(() => {
+    setAuthed(isAuthenticated());
     const handleScroll = () => {
       setScrolled(window.scrollY > 50);
     };
@@ -120,26 +123,41 @@ export default function Navigation() {
 
             {/* CTA Buttons */}
             <div className="flex items-center gap-2 ml-4">
-              <Link
-                href="/login"
-                className={`px-4 py-2 text-sm font-medium uppercase tracking-wider transition-colors ${
-                  scrolled ? "text-white hover:text-white/80" : "text-gray-700 hover:text-gray-900"
-                }`}
-              >
-                Login
-              </Link>
-              <motion.a
-                href="/signup"
-                className={`px-4 py-2 text-sm font-medium uppercase tracking-wider border transition-colors ${
-                  scrolled 
-                    ? "text-white border-white/50 hover:border-white" 
-                    : "text-gray-700 hover:text-gray-900 border-gray-300 hover:border-gray-400"
-                }`}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-              >
-                Sign Up
-              </motion.a>
+              {authed ? (
+                <Link
+                  href="/dashboard"
+                  className={`px-4 py-2 text-sm font-medium uppercase tracking-wider border transition-colors ${
+                    scrolled
+                      ? "text-white border-white/50 hover:border-white"
+                      : "text-gray-700 hover:text-gray-900 border-gray-300 hover:border-gray-400"
+                  }`}
+                >
+                  Dashboard
+                </Link>
+              ) : (
+                <>
+                  <Link
+                    href="/login"
+                    className={`px-4 py-2 text-sm font-medium uppercase tracking-wider transition-colors ${
+                      scrolled ? "text-white hover:text-white/80" : "text-gray-700 hover:text-gray-900"
+                    }`}
+                  >
+                    Login
+                  </Link>
+                  <motion.a
+                    href="/signup"
+                    className={`px-4 py-2 text-sm font-medium uppercase tracking-wider border transition-colors ${
+                      scrolled 
+                        ? "text-white border-white/50 hover:border-white" 
+                        : "text-gray-700 hover:text-gray-900 border-gray-300 hover:border-gray-400"
+                    }`}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    Sign Up
+                  </motion.a>
+                </>
+              )}
             </div>
           </div>
 
@@ -182,18 +200,29 @@ export default function Navigation() {
                 Blog
               </Link>
               <div className="pt-4 border-t border-white/10 flex gap-3">
-                <Link
-                  href="/login"
-                  className="flex-1 text-center text-white py-3 font-medium uppercase tracking-wider text-sm border border-white/20"
-                >
-                  Login
-                </Link>
-                <Link
-                  href="/signup"
-                  className="flex-1 text-center bg-rose-500 text-white py-3 font-semibold uppercase tracking-wider text-sm"
-                >
-                  Sign Up
-                </Link>
+                {authed ? (
+                  <Link
+                    href="/dashboard"
+                    className="flex-1 text-center bg-white text-black py-3 font-medium uppercase tracking-wider text-sm"
+                  >
+                    Dashboard
+                  </Link>
+                ) : (
+                  <>
+                    <Link
+                      href="/login"
+                      className="flex-1 text-center text-white py-3 font-medium uppercase tracking-wider text-sm border border-white/20"
+                    >
+                      Login
+                    </Link>
+                    <Link
+                      href="/signup"
+                      className="flex-1 text-center bg-rose-500 text-white py-3 font-semibold uppercase tracking-wider text-sm"
+                    >
+                      Sign Up
+                    </Link>
+                  </>
+                )}
               </div>
             </div>
           </motion.div>
