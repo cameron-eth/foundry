@@ -1,19 +1,19 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
+import { useSession, signOut } from '@/lib/auth-client';
 import {
-  getStoredApiKey,
-  getStoredOrg,
-  clearAuth,
-  isAuthenticated,
-  getUsage,
-  getDetailedUsage,
   listKeys,
   createKey,
   revokeKey,
   listTools,
+  getBillingStatus,
+  createCheckout,
+  setActiveApiKey,
+  getUsageWithKey,
+  getDetailedUsageWithKey,
   ApiError,
   API_URL,
   type UsageStats,
@@ -21,6 +21,7 @@ import {
   type KeyInfo,
   type CreateKeyResponse,
   type ToolManifest,
+  type BillingStatus,
 } from '@/lib/api';
 
 // ---------------------------------------------------------------------------
@@ -29,8 +30,16 @@ import {
 
 export default function DashboardPage() {
   const router = useRouter();
+  const { data: session, isPending } = useSession();
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Org info from /api/my-org
+  const [orgId, setOrgId] = useState<string | null>(null);
+  const [orgName, setOrgName] = useState<string | null>(null);
+  const [orgPlan, setOrgPlan] = useState<string | null>(null);
+  const [keyPrefix, setKeyPrefix] = useState<string | null>(null);
 
   // Data
   const [usage, setUsage] = useState<UsageStats | null>(null);
@@ -45,20 +54,50 @@ export default function DashboardPage() {
   const [creatingKey, setCreatingKey] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  // Billing
+  const [billing, setBilling] = useState<BillingStatus | null>(null);
+
   // Active tab
-  const [tab, setTab] = useState<'overview' | 'keys' | 'tools' | 'activity'>('overview');
+  const [tab, setTab] = useState<'overview' | 'keys' | 'tools' | 'activity' | 'billing'>('overview');
+
+  // Track if we've loaded (avoid double-fetch)
+  const initialized = useRef(false);
 
   // ------------------------------------------
-  // Initial load
+  // Load org info + data from FastAPI
   // ------------------------------------------
   const loadAll = useCallback(async () => {
     try {
       setError(null);
-      const [usageRes, detailedRes, keysRes, toolsRes] = await Promise.allSettled([
-        getUsage(),
-        getDetailedUsage(),
+
+      // 1. Get org info + active key prefix from Next.js (reads DB via BA session)
+      const orgRes = await fetch('/api/my-org');
+      if (!orgRes.ok) {
+        if (orgRes.status === 404) {
+          // User has a BA account but no org yet — redirect to setup
+          router.push('/signup');
+          return;
+        }
+        throw new Error('Failed to load org info');
+      }
+      const orgData = await orgRes.json();
+      setOrgId(orgData.org_id);
+      setOrgName(orgData.org_name);
+      setOrgPlan(orgData.plan);
+      setKeyPrefix(orgData.key_prefix);
+
+      // Note: we don't have the full API key here (only prefix for display).
+      // FastAPI calls that require X-API-Key will use the key from localStorage
+      // if the user set one, or will fail with 401. Users must use the Keys tab
+      // to get their key and the SDK. Dashboard data is loaded via org context.
+
+      // 2. Load dashboard data (these use X-API-Key from localStorage if present)
+      const [usageRes, detailedRes, keysRes, toolsRes, billingRes] = await Promise.allSettled([
+        getUsageWithKey(),
+        getDetailedUsageWithKey(),
         listKeys(),
         listTools(),
+        getBillingStatus(),
       ]);
 
       if (usageRes.status === 'fulfilled') setUsage(usageRes.value);
@@ -68,17 +107,8 @@ export default function DashboardPage() {
       }
       if (keysRes.status === 'fulfilled') setKeys(keysRes.value);
       if (toolsRes.status === 'fulfilled') setTools(toolsRes.value);
+      if (billingRes.status === 'fulfilled') setBilling(billingRes.value);
 
-      // If usage failed with 401, the key is invalid
-      if (usageRes.status === 'rejected') {
-        const err = usageRes.reason;
-        if (err instanceof ApiError && err.status === 401) {
-          clearAuth();
-          router.push('/login');
-          return;
-        }
-        setError(err.message || 'Failed to load usage data');
-      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       setError(msg);
@@ -88,12 +118,16 @@ export default function DashboardPage() {
   }, [router]);
 
   useEffect(() => {
-    if (!isAuthenticated()) {
+    if (isPending) return;
+    if (!session) {
       router.push('/login');
       return;
     }
-    loadAll();
-  }, [router, loadAll]);
+    if (!initialized.current) {
+      initialized.current = true;
+      loadAll();
+    }
+  }, [session, isPending, router, loadAll]);
 
   // ------------------------------------------
   // Handlers
@@ -103,8 +137,9 @@ export default function DashboardPage() {
     try {
       const result = await createKey(newKeyName.trim() || 'Default');
       setNewlyCreatedKey(result);
+      // Store newly created key so FastAPI calls work in this session
+      setActiveApiKey(result.key);
       setNewKeyName('');
-      // Refresh keys list
       const updatedKeys = await listKeys();
       setKeys(updatedKeys);
     } catch (err: unknown) {
@@ -125,8 +160,8 @@ export default function DashboardPage() {
     }
   };
 
-  const handleSignOut = () => {
-    clearAuth();
+  const handleSignOut = async () => {
+    await signOut();
     router.push('/');
   };
 
@@ -139,7 +174,7 @@ export default function DashboardPage() {
   // ------------------------------------------
   // Loading
   // ------------------------------------------
-  if (loading) {
+  if (isPending || loading) {
     return (
       <div className="min-h-screen bg-[#030712] flex items-center justify-center">
         <div className="flex items-center gap-3">
@@ -150,8 +185,7 @@ export default function DashboardPage() {
     );
   }
 
-  const org = getStoredOrg();
-  const planLabel = usage?.plan || org?.plan || 'free';
+  const planLabel = orgPlan || usage?.plan || 'paygo';
 
   return (
     <div className="min-h-screen bg-[#030712] text-white">
@@ -166,12 +200,17 @@ export default function DashboardPage() {
             Foundry
           </Link>
           <span className="text-white/20">|</span>
-          <span className="text-white/40 text-sm">Dashboard</span>
+          <span className="text-white/40 text-sm">{orgName ?? 'Dashboard'}</span>
         </div>
         <div className="flex items-center gap-4">
-          <span className="hidden sm:inline text-white/40 text-xs font-mono">
-            {getStoredApiKey()?.slice(0, 12)}...
+          <span className="hidden sm:inline text-white/40 text-xs">
+            {session?.user.email}
           </span>
+          {keyPrefix && (
+            <span className="hidden sm:inline text-white/40 text-xs font-mono">
+              {keyPrefix}...
+            </span>
+          )}
           <span className="px-2 py-0.5 text-[10px] uppercase tracking-wider bg-white/[0.06] border border-white/[0.08] text-white/50">
             {planLabel}
           </span>
@@ -223,7 +262,7 @@ export default function DashboardPage() {
 
         {/* Tabs */}
         <div className="flex gap-1 mb-8 border-b border-white/[0.06]">
-          {(['overview', 'keys', 'tools', 'activity'] as const).map((t) => (
+          {(['overview', 'keys', 'tools', 'activity', 'billing'] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -262,6 +301,13 @@ export default function DashboardPage() {
         {tab === 'tools' && <ToolsTab tools={tools} />}
 
         {tab === 'activity' && <ActivityTab events={recentEvents} />}
+
+        {tab === 'billing' && (
+          <BillingTab
+            billing={billing}
+            plan={planLabel}
+          />
+        )}
 
         {/* Quick start */}
         <div className="mt-12">
@@ -313,7 +359,14 @@ function OverviewTab({
   estimatedCost: number;
 }) {
   if (!usage) {
-    return <p className="text-white/40">No usage data available.</p>;
+    return (
+      <div className="text-center py-16">
+        <p className="text-white/40 mb-2">No usage data yet.</p>
+        <p className="text-white/30 text-sm">
+          Go to the Keys tab to create an API key, then use it with the SDK.
+        </p>
+      </div>
+    );
   }
 
   return (
@@ -347,13 +400,11 @@ function OverviewTab({
         <StatCard label="API Keys" value={String(keys.filter((k) => k.is_active).length)} sub="active" />
         <StatCard
           label="Plan"
-          value={usage.plan.charAt(0).toUpperCase() + usage.plan.slice(1)}
+          value={usage.plan === 'paygo' ? 'Pay As You Go' : usage.plan.charAt(0).toUpperCase() + usage.plan.slice(1)}
           sub={
-            usage.plan === 'free'
-              ? 'Upgrade for higher limits'
-              : usage.plan === 'pro'
-                ? '$49/month'
-                : '$199/month'
+            usage.plan === 'paygo'
+              ? '$0.015 / CU'
+              : '$49/month'
           }
         />
       </div>
@@ -383,11 +434,14 @@ function KeysTab({
   return (
     <div>
       <h2
-        className="text-2xl mb-4"
+        className="text-2xl mb-2"
         style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}
       >
         API Keys
       </h2>
+      <p className="text-white/40 text-sm mb-6">
+        Use these keys for programmatic access via the SDK or REST API. Each key is shown only once when created.
+      </p>
 
       {/* Create key */}
       <div className="flex gap-2 mb-6">
@@ -420,7 +474,7 @@ function KeysTab({
 
         {keys.length === 0 ? (
           <div className="px-4 py-10 text-center text-white/30 text-sm">
-            No API keys yet. Create one to get started.
+            No API keys yet. Create one above to get started.
           </div>
         ) : (
           keys.map((key) => (
@@ -590,6 +644,153 @@ function ActivityTab({ events }: { events: UsageEvent[] }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Billing Tab
+// ---------------------------------------------------------------------------
+
+function BillingTab({
+  billing,
+  plan,
+}: {
+  billing: BillingStatus | null;
+  plan: string;
+}) {
+  const [upgrading, setUpgrading] = useState(false);
+
+  const handleUpgrade = async (productId: string) => {
+    setUpgrading(true);
+    try {
+      const res = await createCheckout(
+        productId,
+        `${window.location.origin}/dashboard?upgraded=1`,
+      );
+      if (res.checkout_url) {
+        window.location.href = res.checkout_url;
+      }
+    } catch {
+      // Fall through
+    } finally {
+      setUpgrading(false);
+    }
+  };
+
+  const planDetails: Record<string, { price: string; desc: string }> = {
+    paygo: { price: '$0.015 / CU', desc: 'No monthly fee — pay for what you use' },
+    pro: { price: '$49/mo', desc: '10,000 CU included, then $0.008 / CU' },
+  };
+
+  const currentPlan = planDetails[plan] || planDetails.paygo;
+
+  return (
+    <div>
+      <h2
+        className="text-2xl mb-6"
+        style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}
+      >
+        Billing
+      </h2>
+
+      {/* Current plan */}
+      <div className="bg-white/[0.03] border border-white/[0.08] p-6 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <span className="text-white/40 text-xs uppercase tracking-wider">Current Plan</span>
+            <div
+              className="text-3xl mt-1"
+              style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}
+            >
+              {plan === 'paygo' ? 'Pay As You Go' : plan.charAt(0).toUpperCase() + plan.slice(1)}
+            </div>
+            <span className="text-white/40 text-sm">{currentPlan.price}</span>
+          </div>
+          <div className="text-right">
+            <span className="text-white/30 text-sm">{currentPlan.desc}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Feature usage from Autumn */}
+      {billing?.autumn_enabled && billing.features && (
+        <div className="mb-6">
+          <h3 className="text-white/60 text-sm font-medium mb-3 uppercase tracking-wider">
+            Feature Usage
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {Object.entries(billing.features).map(([featureId, info]) => {
+              const used = info.usage ?? 0;
+              const included = info.included_usage ?? 0;
+              const pct = included > 0 ? (used / included) * 100 : 0;
+
+              return (
+                <div
+                  key={featureId}
+                  className="bg-white/[0.03] border border-white/[0.08] p-5"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-white/40 text-xs uppercase tracking-wider capitalize">
+                      {featureId}
+                    </span>
+                    {info.unlimited ? (
+                      <span className="text-[10px] text-green-400">Unlimited</span>
+                    ) : (
+                      <span className={`text-[10px] ${pct > 80 ? 'text-red-400' : 'text-white/40'}`}>
+                        {pct.toFixed(0)}%
+                      </span>
+                    )}
+                  </div>
+                  <div
+                    className="text-2xl mb-2"
+                    style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}
+                  >
+                    {used.toLocaleString()}
+                    {!info.unlimited && (
+                      <span className="text-white/20 text-lg"> / {included.toLocaleString()}</span>
+                    )}
+                  </div>
+                  {!info.unlimited && (
+                    <div className="w-full h-1 bg-white/[0.05] rounded-full overflow-hidden">
+                      <div
+                        className={`h-full transition-all duration-500 ${
+                          pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-orange-500' : 'bg-green-500'
+                        }`}
+                        style={{ width: `${Math.min(pct, 100)}%` }}
+                      />
+                    </div>
+                  )}
+                  {!info.allowed && (
+                    <p className="text-red-400 text-xs mt-2">Limit reached — upgrade to continue</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Upgrade CTA */}
+      {plan !== 'pro' && (
+        <div className="bg-white/[0.03] border border-white/[0.08] p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-white font-medium mb-1">Upgrade to Pro</h3>
+              <p className="text-white/40 text-sm">
+                $49/mo — 10,000 CU included, priority builds, Exa search
+              </p>
+            </div>
+            <button
+              onClick={() => handleUpgrade('pro')}
+              disabled={upgrading}
+              className="bg-white text-black px-6 py-2.5 font-medium text-sm hover:bg-white/90 transition-colors disabled:opacity-50 shrink-0"
+            >
+              {upgrading ? 'Loading...' : 'Upgrade'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

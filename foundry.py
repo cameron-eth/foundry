@@ -85,6 +85,13 @@ try:
 except:
     neon_secret = modal.Secret.from_dict({"DATABASE_URL": ""})
 
+# Optional: Autumn billing (usage limits + Stripe checkout)
+# Create with: modal secret create autumn-credentials AUTUMN_SECRET_KEY=am_sk_...
+try:
+    autumn_secret = modal.Secret.from_name("autumn-credentials")
+except:
+    autumn_secret = modal.Secret.from_dict({"AUTUMN_SECRET_KEY": ""})
+
 # Optional Event credentials (for event emission)
 optional_event_secret = modal.Secret.from_dict({
     "FOUNDRY_EVENT_API_URL": "",
@@ -94,7 +101,7 @@ optional_event_secret = modal.Secret.from_dict({
 
 @app.function(
     image=foundry_image,
-    secrets=[anthropic_secret, openai_secret, brave_secret, exa_secret, neon_secret, optional_event_secret, branding_secret, hardening_secret],
+    secrets=[anthropic_secret, openai_secret, brave_secret, exa_secret, neon_secret, autumn_secret, optional_event_secret, branding_secret, hardening_secret],
     timeout=300,
     memory=512,
 )

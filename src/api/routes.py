@@ -1876,13 +1876,15 @@ web_app.include_router(tools_router)
 web_app.include_router(execution_router)
 web_app.include_router(search_router)
 
-# Auth, keys, usage, and secrets routers
+# Auth, keys, usage, secrets, and billing routers
 from src.api.keys import keys_router
 from src.api.usage import usage_router
 from src.api.secrets import secrets_router
+from src.api.billing import billing_router
 web_app.include_router(keys_router)
 web_app.include_router(usage_router)
 web_app.include_router(secrets_router)
+web_app.include_router(billing_router)
 
 
 # =============================================================================

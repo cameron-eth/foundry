@@ -1,19 +1,20 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useState, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
-import { register, setStoredApiKey, setStoredOrg, ApiError } from '@/lib/api';
+import { signUp } from '@/lib/auth-client';
 
-export default function SignupPage() {
+function SignupForm() {
+  const router = useRouter();
   const [orgName, setOrgName] = useState('');
   const [email, setEmail] = useState('');
-  const [plan, setPlan] = useState('free');
+  const [password, setPassword] = useState('');
+  const [plan, setPlan] = useState<'paygo' | 'pro'>('paygo');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const router = useRouter();
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,28 +22,35 @@ export default function SignupPage() {
     setLoading(true);
 
     try {
-      const result = await register({
-        org_name: orgName.trim(),
-        email: email.trim() || undefined,
-        plan,
+      // Step 1: Create Better Auth user
+      const result = await signUp.email({
+        email: email.trim(),
+        password,
+        name: orgName.trim(),
       });
 
-      // Store credentials
-      setStoredApiKey(result.api_key);
-      setStoredOrg({
-        org_id: result.org_id,
-        org_name: result.org_name,
-        plan: result.plan,
-      });
-
-      // Show the key so they can copy it
-      setCreatedKey(result.api_key);
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.message);
-      } else {
-        setError('Could not connect to the Foundry API. Please try again.');
+      if (result.error) {
+        setError(result.error.message ?? 'Signup failed');
+        return;
       }
+
+      // Step 2: Create org + API key server-side
+      const res = await fetch('/api/setup-org', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orgName: orgName.trim(), plan }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? 'Failed to create organization');
+        return;
+      }
+
+      // Step 3: Show the API key once
+      setCreatedKey(data.api_key);
+    } catch {
+      setError('Could not connect. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -56,7 +64,7 @@ export default function SignupPage() {
     }
   };
 
-  // After registration — show the key
+  // After signup — show the API key once
   if (createdKey) {
     return (
       <div className="min-h-screen bg-[#030712] flex items-center justify-center px-4">
@@ -85,13 +93,13 @@ export default function SignupPage() {
                 Account created
               </h2>
               <p className="text-white/50 text-sm">
-                Save your API key now. It will not be shown again.
+                Save your API key for SDK access. It will not be shown again.
               </p>
             </div>
 
             <div className="mb-6">
               <label className="block text-white/60 text-xs uppercase tracking-wider mb-2">
-                Your API Key
+                Your API Key (for programmatic access)
               </label>
               <div className="flex items-stretch gap-2">
                 <code className="flex-1 bg-black/40 border border-white/[0.08] px-3 py-2.5 text-sm font-mono text-green-300 break-all select-all">
@@ -104,6 +112,9 @@ export default function SignupPage() {
                   {copied ? 'Copied' : 'Copy'}
                 </button>
               </div>
+              <p className="text-white/30 text-xs mt-2">
+                Use this key with the Foundry SDK or API. You can create more keys from the dashboard.
+              </p>
             </div>
 
             <button
@@ -158,7 +169,7 @@ export default function SignupPage() {
 
             <div>
               <label className="block text-white/60 text-sm mb-1.5">
-                Email <span className="text-white/30">(optional)</span>
+                Email
               </label>
               <input
                 type="email"
@@ -166,6 +177,22 @@ export default function SignupPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full bg-white/[0.05] border border-white/[0.1] px-4 py-3 text-white placeholder-white/30 focus:outline-none focus:border-white/20"
                 placeholder="you@company.com"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-white/60 text-sm mb-1.5">
+                Password
+              </label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-white/[0.05] border border-white/[0.1] px-4 py-3 text-white placeholder-white/30 focus:outline-none focus:border-white/20"
+                placeholder="Min. 8 characters"
+                minLength={8}
+                required
               />
             </div>
 
@@ -173,26 +200,25 @@ export default function SignupPage() {
               <label className="block text-white/60 text-sm mb-1.5">
                 Plan
               </label>
-              <div className="grid grid-cols-3 gap-2">
-                {(['free', 'pro', 'scale'] as const).map((p) => (
+              <div className="grid grid-cols-2 gap-2">
+                {(['paygo', 'pro'] as const).map((p) => (
                   <button
                     key={p}
                     type="button"
                     onClick={() => setPlan(p)}
-                    className={`py-2.5 text-sm font-medium border transition-colors capitalize ${
+                    className={`py-2.5 text-sm font-medium border transition-colors ${
                       plan === p
                         ? 'bg-white text-black border-white'
                         : 'bg-white/[0.03] text-white/60 border-white/[0.08] hover:border-white/20'
                     }`}
                   >
-                    {p}
+                    {p === 'paygo' ? 'Pay As You Go' : 'Pro'}
                   </button>
                 ))}
               </div>
               <p className="text-white/30 text-xs mt-1.5">
-                {plan === 'free' && '100 builds / 1,000 invocations per month'}
-                {plan === 'pro' && '$49/mo — 1,000 builds / 25,000 invocations'}
-                {plan === 'scale' && '$199/mo — 10,000 builds / 250,000 invocations'}
+                {plan === 'paygo' && 'No monthly fee — $0.015 / CU, pay for what you use'}
+                {plan === 'pro' && '$49/mo — 10,000 CU included, then $0.008 / CU'}
               </p>
             </div>
 
@@ -205,16 +231,14 @@ export default function SignupPage() {
             </button>
           </form>
 
-          {/* Footer */}
           <p className="text-center text-white/40 text-sm mt-6">
-            Already have an API key?{' '}
+            Already have an account?{' '}
             <Link href="/login" className="text-white hover:text-white/80 underline">
               Sign in
             </Link>
           </p>
         </div>
 
-        {/* Terms */}
         <p className="text-center text-white/30 text-xs mt-4">
           By creating an account, you agree to our{' '}
           <Link href="/terms" className="underline">Terms of Service</Link>
@@ -223,5 +247,13 @@ export default function SignupPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function SignupPage() {
+  return (
+    <Suspense>
+      <SignupForm />
+    </Suspense>
   );
 }

@@ -254,19 +254,49 @@ async def require_scope(scope: str, auth: AuthContext = Security(require_auth)) 
 async def check_usage_limit(auth: AuthContext, event_type: str) -> bool:
     """Check if the org is within usage limits for the given event type.
     
+    Uses Autumn billing when configured; falls back to DB-based limits.
     Returns True if within limits, raises 429 if exceeded.
     """
+    # ── Autumn check (preferred) ──────────────────────────────────────
+    from src.infra.autumn import get_autumn, EVENT_TO_FEATURE
+
+    autumn = get_autumn()
+    feature_id = EVENT_TO_FEATURE.get(event_type)
+
+    if autumn.is_enabled and feature_id:
+        result = await autumn.check(auth.org_id, feature_id)
+        if not result.allowed:
+            # If balance/usage are None, Autumn has no feature config for this
+            # customer's plan yet — fall through to DB limits instead of hard-blocking
+            if result.balance is None and result.usage is None:
+                logger.warning(
+                    f"Autumn returned allowed=False with no balance data for "
+                    f"{auth.org_id}/{feature_id} — falling back to DB limits"
+                )
+            else:
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        f"Usage limit reached for {event_type} "
+                        f"(balance: {result.balance}, usage: {result.usage}/{result.included_usage}). "
+                        f"Upgrade your plan at https://foundry.ai/pricing"
+                    ),
+                )
+        else:
+            return True
+
+    # ── Fallback: DB-based limits ─────────────────────────────────────
     db = get_db()
 
     if not db.is_configured:
         return True
 
-    result = await db.execute_one(
+    db_result = await db.execute_one(
         "SELECT * FROM get_current_usage($1)",
         [auth.org_id],
     )
 
-    if not result:
+    if not db_result:
         return True
 
     limit_map = {
@@ -277,7 +307,7 @@ async def check_usage_limit(auth: AuthContext, event_type: str) -> bool:
 
     if event_type in limit_map:
         field, limit = limit_map[event_type]
-        current = result.get(field, 0)
+        current = db_result.get(field, 0)
 
         if limit != -1 and current >= limit:
             raise HTTPException(
@@ -300,7 +330,32 @@ async def track_usage(
     error: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ):
-    """Track a usage event."""
+    """Track a usage event in both Autumn (billing) and the local DB."""
+
+    # ── Autumn track (billing-authoritative) ──────────────────────────
+    try:
+        from src.infra.autumn import get_autumn, EVENT_TO_FEATURE
+
+        autumn = get_autumn()
+        feature_id = EVENT_TO_FEATURE.get(event_type)
+
+        if autumn.is_enabled and feature_id and status_code < 500:
+            # Only count successful operations toward billing
+            await autumn.track(
+                customer_id=auth.org_id,
+                feature_id=feature_id,
+                value=1,
+                properties={
+                    "tool_id": tool_id or "",
+                    "endpoint": endpoint or "",
+                    "execution_time_ms": execution_time_ms,
+                },
+                idempotency_key=request_id,
+            )
+    except Exception as e:
+        logger.error(f"Autumn track failed: {e}")
+
+    # ── Local DB track (analytics / dashboard) ────────────────────────
     db = get_db()
 
     if not db.is_configured:

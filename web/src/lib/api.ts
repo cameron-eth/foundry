@@ -1,13 +1,40 @@
 /**
  * Foundry API client.
  *
- * Manages API key storage in localStorage and provides typed helpers
- * for every backend endpoint the dashboard needs.
+ * After Better Auth migration:
+ * - Session/identity is managed by Better Auth (cookie-based)
+ * - `fnd_...` API keys are used for FastAPI (SDK/programmatic access)
+ * - Keys stored in memory + localStorage for SDK/programmatic use
  */
 
-const API_URL =
+export const API_URL =
   process.env.NEXT_PUBLIC_FOUNDRY_API_URL ||
   "https://camfleety--toolfoundry-serve.modal.run";
+
+// ---------------------------------------------------------------------------
+// In-memory active API key (set after creating a key in the dashboard)
+// ---------------------------------------------------------------------------
+
+let _activeApiKey: string | null = null;
+
+export function setActiveApiKey(key: string) {
+  _activeApiKey = key;
+  if (typeof window !== "undefined") {
+    localStorage.setItem("foundry_api_key", key);
+  }
+}
+
+export function getActiveApiKey(): string | null {
+  if (_activeApiKey) return _activeApiKey;
+  if (typeof window !== "undefined") {
+    const stored = localStorage.getItem("foundry_api_key");
+    if (stored) {
+      _activeApiKey = stored;
+      return stored;
+    }
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Key storage
@@ -62,8 +89,10 @@ export function isAuthenticated(): boolean {
 async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
+  overrideKey?: string | null,
 ): Promise<T> {
-  const apiKey = getStoredApiKey();
+  // Use override key if provided, otherwise fall back to active key
+  const apiKey = overrideKey !== undefined ? overrideKey : getActiveApiKey();
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -172,14 +201,14 @@ export interface ToolManifest {
 // API methods
 // ---------------------------------------------------------------------------
 
-/** Register a new organization (no auth required). */
+/** Register a new organization (no auth required — SDK/headless path). */
 export async function register(
   req: RegisterRequest,
 ): Promise<RegisterResponse> {
   return apiFetch<RegisterResponse>("/v1/keys/register", {
     method: "POST",
     body: JSON.stringify(req),
-  });
+  }, null); // explicitly no API key
 }
 
 /** Get current-month usage stats. */
@@ -187,9 +216,19 @@ export async function getUsage(): Promise<UsageStats> {
   return apiFetch<UsageStats>("/v1/usage/current");
 }
 
+/** Get usage stats — for dashboard (uses active key or provided key). */
+export async function getUsageWithKey(key?: string | null): Promise<UsageStats> {
+  return apiFetch<UsageStats>("/v1/usage/current", {}, key ?? getActiveApiKey());
+}
+
 /** Get detailed usage with recent events. */
 export async function getDetailedUsage(): Promise<DetailedUsage> {
   return apiFetch<DetailedUsage>("/v1/usage/detailed");
+}
+
+/** Get detailed usage — for dashboard. */
+export async function getDetailedUsageWithKey(key?: string | null): Promise<DetailedUsage> {
+  return apiFetch<DetailedUsage>("/v1/usage/detailed", {}, key ?? getActiveApiKey());
 }
 
 /** List API keys for the authenticated org. */
@@ -226,4 +265,69 @@ export async function healthCheck(): Promise<{ status: string }> {
   return apiFetch<{ status: string }>("/health");
 }
 
-export { API_URL };
+// ---------------------------------------------------------------------------
+// Billing
+// ---------------------------------------------------------------------------
+
+export interface CheckoutResponse {
+  checkout_url: string | null;
+  message: string;
+  error: string | null;
+}
+
+export interface EntitlementResponse {
+  allowed: boolean;
+  feature_id: string;
+  balance: number | null;
+  usage: number | null;
+  included_usage: number | null;
+  unlimited: boolean;
+}
+
+export interface BillingStatus {
+  org_id: string;
+  autumn_enabled: boolean;
+  features: Record<
+    string,
+    {
+      allowed: boolean;
+      balance: number | null;
+      usage: number | null;
+      included_usage: number | null;
+      unlimited: boolean;
+    }
+  >;
+}
+
+/** Create a Stripe checkout URL for a plan upgrade. */
+export async function createCheckout(
+  productId: string,
+  successUrl?: string,
+  cancelUrl?: string,
+): Promise<CheckoutResponse> {
+  return apiFetch<CheckoutResponse>("/v1/billing/checkout", {
+    method: "POST",
+    body: JSON.stringify({
+      product_id: productId,
+      success_url: successUrl || `${window.location.origin}/dashboard?upgraded=1`,
+      cancel_url: cancelUrl || `${window.location.origin}/pricing`,
+    }),
+  });
+}
+
+/** Check if the org can use a specific feature. */
+export async function checkEntitlement(
+  featureId: string,
+): Promise<EntitlementResponse> {
+  return apiFetch<EntitlementResponse>("/v1/billing/check", {
+    method: "POST",
+    body: JSON.stringify({ feature_id: featureId }),
+  });
+}
+
+/** Get full billing status with all feature balances. */
+export async function getBillingStatus(): Promise<BillingStatus> {
+  return apiFetch<BillingStatus>("/v1/billing/status");
+}
+
+// API_URL is already exported above at declaration

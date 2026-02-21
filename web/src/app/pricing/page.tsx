@@ -4,6 +4,8 @@ import Navigation from "@/components/Navigation";
 import Footer from "@/components/Footer";
 import { motion } from "framer-motion";
 import { useState } from "react";
+import { createCheckout, isAuthenticated } from "@/lib/api";
+import { useRouter } from "next/navigation";
 
 // =============================================================================
 // Pricing Model
@@ -24,16 +26,17 @@ import { useState } from "react";
 
 const plans = [
   {
-    name: "Free",
-    price: "$0",
-    period: "forever",
-    cu: "1,000",
-    cuNum: 1000,
+    name: "Pay As You Go",
+    price: "$0.015",
+    period: "/ CU",
+    cu: "No minimum",
+    cuNum: 0,
     description: "For prototyping and personal projects",
-    cta: "Start Free",
+    cta: "Get Started",
     ctaStyle: "border border-white/20 text-white hover:bg-white/5",
     features: [
-      "1,000 CU / month",
+      "No monthly fee",
+      "$0.015 / CU, pay for what you use",
       "5 concurrent tools",
       "Community support",
       "Standard sandbox (30s timeout)",
@@ -60,26 +63,6 @@ const plans = [
       "Team seats (up to 5)",
     ],
   },
-  {
-    name: "Scale",
-    price: "$399",
-    period: "/mo",
-    cu: "100,000",
-    cuNum: 100000,
-    description: "For high-volume production workloads",
-    cta: "Contact Sales",
-    ctaStyle: "border border-white/20 text-white hover:bg-white/5",
-    features: [
-      "100,000 CU included",
-      "Then $0.005 / CU",
-      "Dedicated sandbox pool",
-      "99.9% uptime SLA",
-      "SSO + RBAC",
-      "Audit logs",
-      "Unlimited team seats",
-      "Custom tool TTL",
-    ],
-  },
 ];
 
 const computePacks = [
@@ -91,16 +74,16 @@ const computePacks = [
 ];
 
 const cuBreakdown = [
-  { action: "Tool Build", cu: "1 CU", desc: "AI generates, validates, and deploys a tool", cost: "$0.01" },
-  { action: "Tool Invoke", cu: "0.1 CU", desc: "Execute a tool in a sandboxed environment", cost: "$0.001" },
-  { action: "Search Query", cu: "0.05 CU", desc: "AI-optimized multi-query web search", cost: "$0.0005" },
-  { action: "Tool Rebuild", cu: "0.5 CU", desc: "Modify an existing tool with new instructions", cost: "$0.005" },
+  { action: "Tool Build", cu: "1 CU", desc: "AI generates, validates, and deploys a tool", cost: "$0.015" },
+  { action: "Tool Invoke", cu: "0.1 CU", desc: "Execute a tool in a sandboxed environment", cost: "$0.0015" },
+  { action: "Search Query", cu: "0.05 CU", desc: "AI-optimized multi-query web search", cost: "$0.00075" },
+  { action: "Tool Rebuild", cu: "0.5 CU", desc: "Modify an existing tool with new instructions", cost: "$0.0075" },
 ];
 
 const faqs = [
   {
     q: "What is a Compute Unit (CU)?",
-    a: "A CU is our universal billing unit. Different operations cost different amounts of CU — a tool build costs 1 CU, an invocation costs 0.1 CU, and a search query costs 0.05 CU. This lets you use your budget however you want.",
+    a: "A CU is our universal billing unit. Different operations cost different amounts of CU — a tool build costs 1 CU, an invocation costs 0.1 CU, and a search query costs 0.05 CU. On Pay As You Go the rate is $0.015/CU. Pro gets a lower $0.008 overage rate.",
   },
   {
     q: "Do unused CU roll over?",
@@ -108,27 +91,65 @@ const faqs = [
   },
   {
     q: "What happens if I exceed my plan's included CU?",
-    a: "On Pro and Scale plans, additional usage is billed at the discounted overage rate shown on your plan. On Free, tools will pause until the next billing cycle.",
+    a: "On Pro, additional usage is billed at $0.008 / CU. On Pay As You Go, you're always billed at $0.015 / CU with no caps.",
   },
   {
     q: "Can I mix prepaid packs with a monthly plan?",
-    a: "Yes. Prepaid CU are consumed first, then your plan's included CU, then overage rates apply. This is the most cost-effective way to scale.",
+    a: "Yes. Prepaid CU are consumed first, then your plan's included CU, then overage rates apply. Prepaid packs also work with Pay As You Go — a great way to get volume discounts without a monthly commitment.",
   },
   {
     q: "Is there a rate limit?",
-    a: "Free: 10 req/s. Pro: 100 req/s. Scale: 1,000 req/s. Need more? Enterprise plans support custom rate limits.",
+    a: "Pay As You Go: 10 req/s. Pro: 100 req/s. Need more? Contact us about enterprise plans.",
   },
   {
     q: "What's your uptime guarantee?",
-    a: "Scale and Enterprise plans include a 99.9% uptime SLA with financial credits for any downtime below that threshold.",
+    a: "We target high availability across both plans. Enterprise arrangements with formal SLAs are available — contact us.",
   },
 ];
 
 export default function PricingPage() {
-  const [billingPeriod, setBillingPeriod] = useState<"monthly" | "annual">("monthly");
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
+  const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
+  const router = useRouter();
 
-  const annualDiscount = 0.8; // 20% off
+  const handlePlanClick = async (planName: string) => {
+    const productMap: Record<string, string> = {
+      "Pay As You Go": "paygo",
+      Pro: "pro",
+    };
+    const productId = productMap[planName];
+    if (!productId) return;
+
+    // Pay As You Go: just go to signup — no checkout needed
+    if (planName === "Pay As You Go") {
+      router.push("/signup");
+      return;
+    }
+
+    // Paid plans: need auth first
+    if (!isAuthenticated()) {
+      router.push(`/signup?plan=${productId}`);
+      return;
+    }
+
+    // Create checkout session
+    setCheckoutLoading(planName);
+    try {
+      const successUrl = `${window.location.origin}/dashboard?upgraded=1`;
+      const cancelUrl = `${window.location.origin}/pricing`;
+      const res = await createCheckout(productId, successUrl, cancelUrl);
+      if (res.checkout_url) {
+        window.location.href = res.checkout_url;
+      } else if (res.error) {
+        alert(res.error);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Checkout failed";
+      alert(msg);
+    } finally {
+      setCheckoutLoading(null);
+    }
+  };
 
   return (
     <main className="min-h-screen bg-gray-950">
@@ -157,47 +178,10 @@ export default function PricingPage() {
             </p>
           </motion.div>
 
-          {/* Billing Toggle */}
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="flex items-center justify-center gap-4 mb-16"
-          >
-            <span className={`text-sm font-medium uppercase tracking-wider ${billingPeriod === "monthly" ? "text-white" : "text-white/40"}`}>
-              Monthly
-            </span>
-            <button
-              onClick={() => setBillingPeriod(billingPeriod === "monthly" ? "annual" : "monthly")}
-              className={`relative w-14 h-7 rounded-full transition-colors ${
-                billingPeriod === "annual" ? "bg-rose-500" : "bg-white/20"
-              }`}
-            >
-              <span
-                className={`absolute top-1 left-1 w-5 h-5 bg-white rounded-full transition-transform ${
-                  billingPeriod === "annual" ? "translate-x-7" : ""
-                }`}
-              />
-            </button>
-            <span className={`text-sm font-medium uppercase tracking-wider ${billingPeriod === "annual" ? "text-white" : "text-white/40"}`}>
-              Annual
-            </span>
-            {billingPeriod === "annual" && (
-              <span className="text-xs font-mono text-rose-400 border border-rose-400/30 px-2 py-0.5">
-                Save 20%
-              </span>
-            )}
-          </motion.div>
-
           {/* Plan Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-white/[0.06] mb-32">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-white/[0.06] mb-32 mt-16">
             {plans.map((plan, index) => {
-              const displayPrice =
-                plan.price === "$0"
-                  ? "$0"
-                  : billingPeriod === "annual"
-                    ? `$${Math.round(parseInt(plan.price.replace("$", "")) * annualDiscount)}`
-                    : plan.price;
+              const displayPrice = plan.price;
 
               return (
                 <motion.div
@@ -240,12 +224,13 @@ export default function PricingPage() {
                     </p>
                   </div>
 
-                  <a
-                    href="/signup"
-                    className={`block w-full text-center py-3 text-sm font-medium uppercase tracking-wider transition-colors mb-8 ${plan.ctaStyle}`}
+                  <button
+                    onClick={() => handlePlanClick(plan.name)}
+                    disabled={checkoutLoading === plan.name}
+                    className={`block w-full text-center py-3 text-sm font-medium uppercase tracking-wider transition-colors mb-8 disabled:opacity-50 ${plan.ctaStyle}`}
                   >
-                    {plan.cta}
-                  </a>
+                    {checkoutLoading === plan.name ? "Loading..." : plan.cta}
+                  </button>
 
                   <ul className="space-y-3">
                     {plan.features.map((feature) => (
@@ -404,30 +389,25 @@ export default function PricingPage() {
                 <thead>
                   <tr className="border-b border-white/[0.08]">
                     <th className="text-left text-white/40 font-mono uppercase tracking-wider text-xs py-4 pr-4">Feature</th>
-                    <th className="text-center text-white/40 font-mono uppercase tracking-wider text-xs py-4 px-4">Free</th>
+                    <th className="text-center text-white/40 font-mono uppercase tracking-wider text-xs py-4 px-4">Pay As You Go</th>
                     <th className="text-center text-white font-mono uppercase tracking-wider text-xs py-4 px-4">Pro</th>
-                    <th className="text-center text-white/40 font-mono uppercase tracking-wider text-xs py-4 px-4">Scale</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/[0.04]">
                   {[
-                    { feature: "Included CU / month", free: "1,000", pro: "10,000", scale: "100,000" },
-                    { feature: "Overage rate", free: "Paused", pro: "$0.008 / CU", scale: "$0.005 / CU" },
-                    { feature: "Concurrent tools", free: "5", pro: "Unlimited", scale: "Unlimited" },
-                    { feature: "Sandbox timeout", free: "30s", pro: "60s", scale: "120s" },
-                    { feature: "Rate limit", free: "10 req/s", pro: "100 req/s", scale: "1,000 req/s" },
-                    { feature: "Team seats", free: "1", pro: "5", scale: "Unlimited" },
-                    { feature: "Support", free: "Community", pro: "Priority", scale: "Dedicated" },
-                    { feature: "SSO + RBAC", free: "\u2014", pro: "\u2014", scale: "\u2713" },
-                    { feature: "Uptime SLA", free: "\u2014", pro: "\u2014", scale: "99.9%" },
-                    { feature: "Audit logs", free: "\u2014", pro: "\u2014", scale: "\u2713" },
-                    { feature: "Custom tool TTL", free: "\u2014", pro: "\u2014", scale: "\u2713" },
+                    { feature: "Included CU / month", paygo: "None", pro: "10,000" },
+                    { feature: "Rate / CU", paygo: "$0.015", pro: "$0.008 overage" },
+                    { feature: "Concurrent tools", paygo: "5", pro: "Unlimited" },
+                    { feature: "Sandbox timeout", paygo: "30s", pro: "60s" },
+                    { feature: "Rate limit", paygo: "10 req/s", pro: "100 req/s" },
+                    { feature: "Team seats", paygo: "1", pro: "5" },
+                    { feature: "Support", paygo: "Community", pro: "Priority" },
+                    { feature: "Usage dashboard", paygo: "\u2014", pro: "\u2713" },
                   ].map((row) => (
                     <tr key={row.feature}>
                       <td className="text-white/60 py-3 pr-4">{row.feature}</td>
-                      <td className="text-center text-white/40 py-3 px-4">{row.free}</td>
+                      <td className="text-center text-white/40 py-3 px-4">{row.paygo}</td>
                       <td className="text-center text-white py-3 px-4">{row.pro}</td>
-                      <td className="text-center text-white/60 py-3 px-4">{row.scale}</td>
                     </tr>
                   ))}
                 </tbody>

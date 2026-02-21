@@ -30,7 +30,8 @@ class RegisterRequest(BaseModel):
     """Register a new organization and get your first API key."""
     org_name: str = Field(description="Your organization or project name")
     email: Optional[str] = Field(default=None, description="Contact email (optional)")
-    plan: str = Field(default="free", description="Billing plan: free, pro, scale")
+    plan: str = Field(default="paygo", description="Billing plan: paygo, pro")
+    user_id: Optional[str] = Field(default=None, description="Better Auth user ID (set by web signup flow)")
 
 
 class RegisterResponse(BaseModel):
@@ -203,7 +204,7 @@ async def register(request: RegisterRequest):
         raise HTTPException(status_code=503, detail="Database not configured")
     
     # Validate plan
-    valid_plans = {"free", "pro", "scale"}
+    valid_plans = {"paygo", "pro"}
     if request.plan not in valid_plans:
         raise HTTPException(
             status_code=400,
@@ -236,12 +237,13 @@ async def register(request: RegisterRequest):
     
     org_id = str(uuid.uuid4())
     
-    # Create organization
+    # Create organization (owner_user_id from Better Auth if provided)
     await db.execute(
         """
-        INSERT INTO organizations (id, name, slug, plan, monthly_build_limit, 
-                                   monthly_invoke_limit, monthly_search_limit, concurrent_tools_limit)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        INSERT INTO organizations (id, name, slug, plan, monthly_build_limit,
+                                   monthly_invoke_limit, monthly_search_limit, concurrent_tools_limit,
+                                   owner_user_id, owner_email)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         """,
         [
             org_id,
@@ -252,19 +254,39 @@ async def register(request: RegisterRequest):
             plan_row["monthly_invocations"],
             plan_row["monthly_searches"],
             plan_row["concurrent_tools"],
+            request.user_id,   # nullable — None for SDK registrations
+            request.email,
         ],
     )
-    
-    # Generate first API key
+
+    # Generate first API key (created_by is now nullable)
     full_key, prefix, key_hash = generate_api_key()
-    
+
     await db.execute(
         """
-        INSERT INTO api_keys (org_id, name, key_prefix, key_hash, scopes)
-        VALUES ($1, $2, $3, $4, ARRAY['tools:create','tools:invoke','tools:read','search'])
+        INSERT INTO api_keys (org_id, created_by, name, key_prefix, key_hash, scopes)
+        VALUES ($1, $2, $3, $4, $5, ARRAY['tools:create','tools:invoke','tools:read','search'])
         """,
-        [org_id, "Default Key", prefix, key_hash],
+        [org_id, request.user_id, "Default Key", prefix, key_hash],
     )
+    
+    # ── Create Autumn customer & attach free plan ─────────────────────
+    try:
+        from src.infra.autumn import get_autumn
+        autumn = get_autumn()
+        if autumn.is_enabled:
+            await autumn.create_customer(
+                customer_id=org_id,
+                name=request.org_name.strip(),
+                email=request.email,
+            )
+            # Attach the appropriate product
+            product_map = {"paygo": "paygo", "pro": "pro"}
+            product_id = product_map.get(request.plan, "paygo")
+            await autumn.attach(org_id, product_id)
+            logger.info(f"Autumn: created customer {org_id} with product '{product_id}'")
+    except Exception as e:
+        logger.error(f"Autumn customer setup failed (non-blocking): {e}")
     
     logger.info(f"Registered new org '{request.org_name}' ({org_id}) on plan '{request.plan}'")
     
