@@ -4,119 +4,127 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useSession, signOut } from '@/lib/auth-client';
-import {
-  listKeys,
-  createKey,
-  revokeKey,
-  listTools,
-  getBillingStatus,
-  createCheckout,
-  setActiveApiKey,
-  getActiveApiKey,
-  getUsageWithKey,
-  getDetailedUsageWithKey,
-  ApiError,
-  API_URL,
-  type UsageStats,
-  type UsageEvent,
-  type KeyInfo,
-  type CreateKeyResponse,
-  type ToolManifest,
-  type BillingStatus,
-} from '@/lib/api';
 
 // ---------------------------------------------------------------------------
-// Page
+// Types
+// ---------------------------------------------------------------------------
+
+interface OrgData {
+  org_id: string;
+  org_name: string;
+  plan: string;
+}
+
+interface UsageStats {
+  builds: number;
+  invocations: number;
+  searches: number;
+  builds_limit: number;
+  invocations_limit: number;
+  searches_limit: number;
+  plan: string;
+}
+
+interface UsageEvent {
+  event_type: string;
+  tool_id: string | null;
+  execution_time_ms: number;
+  tokens_used: number;
+  created_at: string;
+}
+
+interface KeyInfo {
+  key_id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  is_active: boolean;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+interface ToolManifest {
+  tool_id: string;
+  name: string;
+  description: string;
+  status: string;
+  input_schema: Record<string, unknown>;
+  invoke_url: string;
+  created_at: string;
+}
+
+interface BillingInfo {
+  has_payment_method: boolean;
+  org_id: string;
+  plan: string;
+  autumn_enabled?: boolean;
+  features?: Record<string, { allowed: boolean; balance: number | null; usage: number | null; included_usage: number | null }>;
+}
+
+// ---------------------------------------------------------------------------
+// Main Dashboard
 // ---------------------------------------------------------------------------
 
 export default function DashboardPage() {
   const router = useRouter();
   const { data: session, isPending } = useSession();
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  // Org info from /api/my-org
-  const [orgId, setOrgId] = useState<string | null>(null);
-  const [orgName, setOrgName] = useState<string | null>(null);
-  const [orgPlan, setOrgPlan] = useState<string | null>(null);
-  const [keyPrefix, setKeyPrefix] = useState<string | null>(null);
-
-  // Data
+  const [org, setOrg] = useState<OrgData | null>(null);
   const [usage, setUsage] = useState<UsageStats | null>(null);
-  const [recentEvents, setRecentEvents] = useState<UsageEvent[]>([]);
+  const [events, setEvents] = useState<UsageEvent[]>([]);
   const [estimatedCost, setEstimatedCost] = useState(0);
   const [keys, setKeys] = useState<KeyInfo[]>([]);
   const [tools, setTools] = useState<ToolManifest[]>([]);
+  const [billing, setBilling] = useState<BillingInfo | null>(null);
 
-  // Key creation
-  const [newKeyName, setNewKeyName] = useState('');
-  const [newlyCreatedKey, setNewlyCreatedKey] = useState<CreateKeyResponse | null>(null);
-  const [creatingKey, setCreatingKey] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<'overview' | 'build' | 'tools' | 'keys' | 'activity' | 'billing'>('overview');
 
-  // Billing
-  const [billing, setBilling] = useState<BillingStatus | null>(null);
-
-  // Active tab
-  const [tab, setTab] = useState<'overview' | 'keys' | 'tools' | 'activity' | 'billing'>('overview');
-
-  // API key entry (for users who haven't stored a key yet)
-  const [hasApiKey, setHasApiKey] = useState(false);
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [apiKeyError, setApiKeyError] = useState('');
-
-  // Track if we've loaded (avoid double-fetch)
   const initialized = useRef(false);
 
   // ------------------------------------------
-  // Load org info + data from FastAPI
+  // Load all data via server-side proxy routes
   // ------------------------------------------
   const loadAll = useCallback(async () => {
     try {
       setError(null);
 
-      // 1. Get org info + active key prefix from Next.js (reads DB via BA session)
+      // 1. org info
       const orgRes = await fetch('/api/my-org');
       if (!orgRes.ok) {
-        if (orgRes.status === 404) {
-          // User has a BA account but no org yet — redirect to setup
-          router.push('/signup');
-          return;
-        }
-        throw new Error('Failed to load org info');
+        if (orgRes.status === 404) { router.push('/setup'); return; }
+        throw new Error('Failed to load org');
       }
       const orgData = await orgRes.json();
-      setOrgId(orgData.org_id);
-      setOrgName(orgData.org_name);
-      setOrgPlan(orgData.plan);
-      setKeyPrefix(orgData.key_prefix);
+      setOrg({ org_id: orgData.org_id, org_name: orgData.org_name, plan: orgData.plan });
 
-      // Check if we have an API key in memory/localStorage
-      const activeKey = getActiveApiKey();
-      setHasApiKey(!!activeKey);
-
-      // 2. Load dashboard data (these use X-API-Key from localStorage if present)
-      const [usageRes, detailedRes, keysRes, toolsRes, billingRes] = await Promise.allSettled([
-        getUsageWithKey(),
-        getDetailedUsageWithKey(),
-        listKeys(),
-        listTools(),
-        getBillingStatus(),
+      // 2. All data in parallel via proxy routes (server handles the API key)
+      const [usageRes, keysRes, toolsRes, billingRes] = await Promise.allSettled([
+        fetch('/api/dashboard/usage').then(r => r.json()),
+        fetch('/api/dashboard/keys').then(r => r.json()),
+        fetch('/api/dashboard/tools').then(r => r.json()),
+        fetch('/api/dashboard/billing').then(r => r.json()),
       ]);
 
-      if (usageRes.status === 'fulfilled') setUsage(usageRes.value);
-      if (detailedRes.status === 'fulfilled') {
-        setRecentEvents(detailedRes.value.recent_events);
-        setEstimatedCost(detailedRes.value.estimated_cost_usd);
+      if (usageRes.status === 'fulfilled') {
+        const d = usageRes.value;
+        if (d.usage) setUsage(d.usage);
+        if (d.detailed?.recent_events) setEvents(d.detailed.recent_events);
+        if (d.detailed?.estimated_cost_usd !== undefined) setEstimatedCost(d.detailed.estimated_cost_usd);
       }
-      if (keysRes.status === 'fulfilled') setKeys(keysRes.value);
-      if (toolsRes.status === 'fulfilled') setTools(toolsRes.value);
-      if (billingRes.status === 'fulfilled') setBilling(billingRes.value);
+      if (keysRes.status === 'fulfilled' && keysRes.value.keys) {
+        setKeys(keysRes.value.keys);
+      }
+      if (toolsRes.status === 'fulfilled' && toolsRes.value.tools) {
+        setTools(toolsRes.value.tools);
+      }
+      if (billingRes.status === 'fulfilled') {
+        setBilling(billingRes.value);
+      }
 
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
-      setError(msg);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load dashboard');
     } finally {
       setLoading(false);
     }
@@ -124,76 +132,18 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (isPending) return;
-    if (!session) {
-      router.push('/login');
-      return;
-    }
+    if (!session) { router.push('/login'); return; }
     if (!initialized.current) {
       initialized.current = true;
       loadAll();
     }
   }, [session, isPending, router, loadAll]);
 
-  // ------------------------------------------
-  // Handlers
-  // ------------------------------------------
-  const handleCreateKey = async () => {
-    setCreatingKey(true);
-    try {
-      const result = await createKey(newKeyName.trim() || 'Default');
-      setNewlyCreatedKey(result);
-      // Store newly created key so FastAPI calls work in this session
-      setActiveApiKey(result.key);
-      setNewKeyName('');
-      const updatedKeys = await listKeys();
-      setKeys(updatedKeys);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to create key';
-      setError(msg);
-    } finally {
-      setCreatingKey(false);
-    }
-  };
-
-  const handleRevokeKey = async (keyId: string) => {
-    try {
-      await revokeKey(keyId);
-      setKeys((prev) => prev.filter((k) => k.key_id !== keyId));
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to revoke key';
-      setError(msg);
-    }
-  };
-
   const handleSignOut = async () => {
     await signOut();
     router.push('/');
   };
 
-  const handleSetApiKey = async () => {
-    const key = apiKeyInput.trim();
-    if (!key.startsWith('fnd_')) {
-      setApiKeyError('Key must start with fnd_');
-      return;
-    }
-    setApiKeyError('');
-    setActiveApiKey(key);
-    setHasApiKey(true);
-    setApiKeyInput('');
-    // Reload data with the new key
-    initialized.current = false;
-    loadAll();
-  };
-
-  const handleCopyKey = (key: string) => {
-    navigator.clipboard.writeText(key);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  // ------------------------------------------
-  // Loading
-  // ------------------------------------------
   if (isPending || loading) {
     return (
       <div className="min-h-screen bg-[#030712] flex items-center justify-center">
@@ -205,186 +155,90 @@ export default function DashboardPage() {
     );
   }
 
-  const planLabel = orgPlan || usage?.plan || 'paygo';
+  const hasPayment = billing?.has_payment_method ?? false;
 
   return (
     <div className="min-h-screen bg-[#030712] text-white">
       {/* Header */}
       <header className="border-b border-white/[0.06] px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-6">
-          <Link
-            href="/"
-            className="text-2xl text-white"
-            style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}
-          >
+        <div className="flex items-center gap-4">
+          <Link href="/" className="text-xl text-white" style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}>
             Foundry
           </Link>
           <span className="text-white/20">|</span>
-          <span className="text-white/40 text-sm">{orgName ?? 'Dashboard'}</span>
+          <span className="text-white/50 text-sm">{org?.org_name}</span>
         </div>
         <div className="flex items-center gap-4">
-          <span className="hidden sm:inline text-white/40 text-xs">
-            {session?.user.email}
-          </span>
-          {keyPrefix && (
-            <span className="hidden sm:inline text-white/40 text-xs font-mono">
-              {keyPrefix}...
-            </span>
-          )}
+          <span className="hidden sm:inline text-white/40 text-xs">{session?.user.email}</span>
           <span className="px-2 py-0.5 text-[10px] uppercase tracking-wider bg-white/[0.06] border border-white/[0.08] text-white/50">
-            {planLabel}
+            {org?.plan ?? 'paygo'}
           </span>
-          <button
-            onClick={handleSignOut}
-            className="text-sm text-white/40 hover:text-white transition-colors"
-          >
+          <button onClick={handleSignOut} className="text-sm text-white/40 hover:text-white transition-colors">
             Sign out
           </button>
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto px-6 py-8">
-        {/* Error banner */}
-        {error && (
-          <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 text-red-400 text-sm flex items-center justify-between">
-            <span>{error}</span>
-            <button onClick={() => setError(null)} className="text-red-400/60 hover:text-red-400">
-              Dismiss
+      <div className="max-w-5xl mx-auto px-6 py-8">
+        {/* Payment required banner */}
+        {!hasPayment && (
+          <div className="mb-6 p-4 bg-amber-500/10 border border-amber-500/20 flex items-start gap-4">
+            <svg className="w-5 h-5 text-amber-400 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+            </svg>
+            <div className="flex-1">
+              <p className="text-amber-400 text-sm font-medium">Add a payment method to get started</p>
+              <p className="text-amber-400/60 text-xs mt-0.5">
+                Building tools and creating API keys requires a payment method on file. You only pay for what you use.
+              </p>
+            </div>
+            <button
+              onClick={() => setTab('billing')}
+              className="shrink-0 px-4 py-2 bg-amber-500 text-black text-sm font-medium hover:bg-amber-400 transition-colors"
+            >
+              Add Card
             </button>
           </div>
         )}
 
-        {/* New key banner */}
-        {newlyCreatedKey && (
-          <div className="mb-6 p-4 bg-green-500/10 border border-green-500/20">
-            <p className="text-green-400 text-sm font-medium mb-2">
-              New API key created. Copy it now — you will not see it again.
-            </p>
-            <div className="flex items-stretch gap-2">
-              <code className="flex-1 bg-black/40 border border-white/[0.08] px-3 py-2 text-sm font-mono text-green-300 break-all select-all">
-                {newlyCreatedKey.key}
-              </code>
-              <button
-                onClick={() => handleCopyKey(newlyCreatedKey.key)}
-                className="px-4 bg-green-500/20 text-green-400 text-sm hover:bg-green-500/30 transition-colors shrink-0"
-              >
-                {copied ? 'Copied' : 'Copy'}
-              </button>
-              <button
-                onClick={() => setNewlyCreatedKey(null)}
-                className="px-3 text-white/40 text-sm hover:text-white transition-colors"
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* API key prompt — shown when no key is stored */}
-        {!hasApiKey && (
-          <div className="mb-6 p-4 bg-yellow-500/10 border border-yellow-500/20">
-            <p className="text-yellow-400 text-sm font-medium mb-3">
-              Enter your API key to load usage data and test tools.
-              <span className="text-yellow-400/60 font-normal"> (Or go to the Keys tab to create a new one.)</span>
-            </p>
-            {apiKeyError && <p className="text-red-400 text-xs mb-2">{apiKeyError}</p>}
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={apiKeyInput}
-                onChange={(e) => setApiKeyInput(e.target.value)}
-                placeholder="fnd_..."
-                className="flex-1 bg-black/30 border border-yellow-500/20 px-3 py-2 text-white text-sm font-mono placeholder-white/20 focus:outline-none focus:border-yellow-400/40"
-                onKeyDown={(e) => e.key === 'Enter' && handleSetApiKey()}
-              />
-              <button
-                onClick={handleSetApiKey}
-                className="px-4 py-2 bg-yellow-500/20 text-yellow-400 text-sm font-medium hover:bg-yellow-500/30 transition-colors shrink-0"
-              >
-                Use Key
-              </button>
-            </div>
+        {error && (
+          <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 text-red-400 text-sm flex justify-between">
+            <span>{error}</span>
+            <button onClick={() => setError(null)}>✕</button>
           </div>
         )}
 
         {/* Tabs */}
-        <div className="flex gap-1 mb-8 border-b border-white/[0.06]">
-          {(['overview', 'keys', 'tools', 'activity', 'billing'] as const).map((t) => (
+        <div className="flex gap-0 mb-8 border-b border-white/[0.06] overflow-x-auto">
+          {(['overview', 'build', 'tools', 'keys', 'activity', 'billing'] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
-              className={`px-4 py-3 text-sm font-medium capitalize transition-colors border-b-2 -mb-px ${
-                tab === t
-                  ? 'text-white border-white'
-                  : 'text-white/40 border-transparent hover:text-white/60'
+              className={`px-4 py-3 text-sm font-medium capitalize transition-colors border-b-2 -mb-px whitespace-nowrap ${
+                tab === t ? 'text-white border-white' : 'text-white/40 border-transparent hover:text-white/60'
               }`}
             >
-              {t}
+              {t === 'build' ? '+ Build Tool' : t}
             </button>
           ))}
         </div>
 
-        {/* Tab content */}
         {tab === 'overview' && (
-          <OverviewTab
-            usage={usage}
-            tools={tools}
-            keys={keys}
-            estimatedCost={estimatedCost}
-          />
+          <OverviewTab usage={usage} tools={tools} keys={keys} estimatedCost={estimatedCost} hasPayment={hasPayment} onGoToBilling={() => setTab('billing')} onGoBuild={() => setTab('build')} />
         )}
-
+        {tab === 'build' && (
+          <BuildTab hasPayment={hasPayment} orgId={org?.org_id ?? ''} onToolBuilt={(tool) => { setTools(prev => [tool, ...prev]); setTab('tools'); }} onGoToBilling={() => setTab('billing')} />
+        )}
+        {tab === 'tools' && (
+          <ToolsTab tools={tools} />
+        )}
         {tab === 'keys' && (
-          <KeysTab
-            keys={keys}
-            newKeyName={newKeyName}
-            setNewKeyName={setNewKeyName}
-            creatingKey={creatingKey}
-            onCreateKey={handleCreateKey}
-            onRevokeKey={handleRevokeKey}
-          />
+          <KeysTab keys={keys} hasPayment={hasPayment} onKeysChanged={setKeys} onGoToBilling={() => setTab('billing')} />
         )}
-
-        {tab === 'tools' && <ToolsTab tools={tools} />}
-
-        {tab === 'activity' && <ActivityTab events={recentEvents} />}
-
+        {tab === 'activity' && <ActivityTab events={events} />}
         {tab === 'billing' && (
-          <BillingTab
-            billing={billing}
-            plan={planLabel}
-          />
+          <BillingTab billing={billing} plan={org?.plan ?? 'paygo'} orgId={org?.org_id ?? ''} onPaymentAdded={() => { setBilling(prev => prev ? { ...prev, has_payment_method: true } : prev); }} />
         )}
-
-        {/* Quick start */}
-        <div className="mt-12">
-          <h2
-            className="text-2xl mb-4"
-            style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}
-          >
-            Quick Start
-          </h2>
-          <div className="bg-white/[0.03] border border-white/[0.08] p-6">
-            <p className="text-white/60 mb-4 text-sm">
-              Install the SDK and start building tools:
-            </p>
-            <pre className="bg-black/40 border border-white/[0.06] p-4 text-sm font-mono text-green-300 overflow-x-auto">
-{`pip install foundry-sdk
-
-from foundry import Foundry
-
-client = Foundry(api_key="your-api-key")
-
-# Create a tool from a description
-tool = client.create("Calculate compound interest")
-result = tool.invoke(principal=1000, rate=0.05, time=10)
-print(result.result)`}
-            </pre>
-            <p className="text-white/30 text-xs mt-3">
-              Base URL: <code className="text-white/50">{API_URL}</code>
-            </p>
-          </div>
-        </div>
       </div>
     </div>
   );
@@ -395,203 +249,288 @@ print(result.result)`}
 // ---------------------------------------------------------------------------
 
 function OverviewTab({
-  usage,
-  tools,
-  keys,
-  estimatedCost,
+  usage, tools, keys, estimatedCost, hasPayment, onGoToBilling, onGoBuild,
 }: {
   usage: UsageStats | null;
   tools: ToolManifest[];
   keys: KeyInfo[];
   estimatedCost: number;
+  hasPayment: boolean;
+  onGoToBilling: () => void;
+  onGoBuild: () => void;
 }) {
-  if (!usage) {
+  return (
+    <div>
+      {/* Usage stats */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+        <StatCard label="Tool Builds" value={String(usage?.builds ?? 0)} sub={usage?.builds_limit === -1 ? 'unlimited' : `/ ${usage?.builds_limit ?? '—'}`} />
+        <StatCard label="Invocations" value={String(usage?.invocations ?? 0)} sub={usage?.invocations_limit === -1 ? 'unlimited' : `/ ${usage?.invocations_limit ?? '—'}`} />
+        <StatCard label="Searches" value={String(usage?.searches ?? 0)} sub={usage?.searches_limit === -1 ? 'unlimited' : `/ ${usage?.searches_limit ?? '—'}`} />
+        <StatCard label="Est. Cost" value={`$${estimatedCost.toFixed(2)}`} sub="this month" />
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+        <StatCard label="Active Tools" value={String(tools.filter(t => t.status === 'ready').length)} sub={`${tools.length} total`} />
+        <StatCard label="API Keys" value={String(keys.filter(k => k.is_active).length)} sub="active" />
+        <StatCard
+          label="Plan"
+          value={usage?.plan === 'paygo' ? 'Pay As You Go' : (usage?.plan ?? 'paygo')}
+          sub={usage?.plan === 'paygo' ? '$0.015 / CU' : '$49/month'}
+        />
+      </div>
+
+      {/* CTA */}
+      <div className="bg-white/[0.02] border border-white/[0.08] p-8 text-center">
+        {!hasPayment ? (
+          <>
+            <h3 className="text-xl text-white mb-2" style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}>
+              Ready to build your first tool?
+            </h3>
+            <p className="text-white/40 text-sm mb-4">Add a payment method to get started. You only pay for what you use.</p>
+            <button onClick={onGoToBilling} className="bg-white text-black px-6 py-2.5 font-medium hover:bg-white/90 transition-colors">
+              Add Payment Method
+            </button>
+          </>
+        ) : (
+          <>
+            <h3 className="text-xl text-white mb-2" style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}>
+              Build a tool with AI
+            </h3>
+            <p className="text-white/40 text-sm mb-4">Describe what you need and Foundry builds it in seconds.</p>
+            <button onClick={onGoBuild} className="bg-white text-black px-6 py-2.5 font-medium hover:bg-white/90 transition-colors">
+              + Build Tool
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* SDK quickstart */}
+      <div className="mt-8 bg-white/[0.02] border border-white/[0.08] p-6">
+        <h3 className="text-white/60 text-sm uppercase tracking-wider mb-4">SDK Quickstart</h3>
+        <pre className="bg-black/40 p-4 text-sm font-mono text-green-300 overflow-x-auto">{`pip install foundry-sdk
+
+from foundry import Foundry
+client = Foundry(api_key="your-fnd_... key")
+
+tool = client.create("Calculate compound interest")
+result = tool.invoke(principal=1000, rate=0.05, time=10)
+print(result.result)`}</pre>
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ label, value, sub }: { label: string; value: string; sub: string }) {
+  return (
+    <div className="bg-white/[0.03] border border-white/[0.06] p-5">
+      <p className="text-white/40 text-xs uppercase tracking-wider mb-2">{label}</p>
+      <p className="text-2xl text-white font-light mb-1">{value}</p>
+      <p className="text-white/30 text-xs">{sub}</p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Build Tool Tab
+// ---------------------------------------------------------------------------
+
+function BuildTab({
+  hasPayment, orgId, onToolBuilt, onGoToBilling,
+}: {
+  hasPayment: boolean;
+  orgId: string;
+  onToolBuilt: (tool: ToolManifest) => void;
+  onGoToBilling: () => void;
+}) {
+  const [description, setDescription] = useState('');
+  const [building, setBuilding] = useState(false);
+  const [result, setResult] = useState<{ success: boolean; tool?: ToolManifest; error?: string } | null>(null);
+
+  const examples = [
+    'Calculate compound interest given principal, rate, and time period',
+    'Convert between temperature units (Celsius, Fahrenheit, Kelvin)',
+    'Validate an email address and return a formatted report',
+    'Summarize a block of text to key bullet points',
+    'Parse a CSV string and return it as JSON with column headers',
+  ];
+
+  const handleBuild = async () => {
+    if (!description.trim()) return;
+    setBuilding(true);
+    setResult(null);
+
+    try {
+      const res = await fetch('/api/dashboard/tools', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: description.trim() }),
+      });
+      const data = await res.json();
+
+      if (res.status === 402) {
+        setResult({ success: false, error: 'payment_required' });
+        return;
+      }
+      if (!res.ok || data.status === 'failed') {
+        setResult({ success: false, error: data.message || data.error || 'Build failed' });
+        return;
+      }
+
+      // Build succeeded
+      const tool: ToolManifest = {
+        tool_id: data.tool_id,
+        name: description.slice(0, 60),
+        description: description,
+        status: 'ready',
+        input_schema: {},
+        invoke_url: data.invoke_url || '',
+        created_at: new Date().toISOString(),
+      };
+      setResult({ success: true, tool });
+      onToolBuilt(tool);
+    } catch (err) {
+      setResult({ success: false, error: err instanceof Error ? err.message : 'Build failed' });
+    } finally {
+      setBuilding(false);
+    }
+  };
+
+  if (!hasPayment) {
     return (
       <div className="text-center py-16">
-        <p className="text-white/40 mb-2">No usage data yet.</p>
-        <p className="text-white/30 text-sm">
-          Go to the Keys tab to create an API key, then use it with the SDK.
+        <div className="inline-flex items-center justify-center w-16 h-16 bg-amber-500/10 border border-amber-500/20 mb-6">
+          <svg className="w-8 h-8 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+          </svg>
+        </div>
+        <h3 className="text-xl text-white mb-2" style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}>
+          Payment required to build tools
+        </h3>
+        <p className="text-white/40 text-sm mb-6 max-w-sm mx-auto">
+          Add a payment method to start building. You only pay $0.015 per tool build.
         </p>
+        <button onClick={onGoToBilling} className="bg-white text-black px-8 py-3 font-medium hover:bg-white/90 transition-colors">
+          Add Payment Method
+        </button>
       </div>
     );
   }
 
   return (
-    <div>
-      {/* Usage cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <UsageCard
-          label="Tool Builds"
-          current={usage.builds}
-          limit={usage.builds_limit}
-          color="pink"
-        />
-        <UsageCard
-          label="Invocations"
-          current={usage.invocations}
-          limit={usage.invocations_limit}
-          color="orange"
-        />
-        <UsageCard
-          label="Searches"
-          current={usage.searches}
-          limit={usage.searches_limit}
-          color="green"
-        />
-        <StatCard label="Est. Cost" value={`$${estimatedCost.toFixed(2)}`} sub="this month" />
-      </div>
-
-      {/* Summary row */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <StatCard label="Active Tools" value={String(tools.filter((t) => t.status === 'ready').length)} sub={`${tools.length} total`} />
-        <StatCard label="API Keys" value={String(keys.filter((k) => k.is_active).length)} sub="active" />
-        <StatCard
-          label="Plan"
-          value={usage.plan === 'paygo' ? 'Pay As You Go' : usage.plan.charAt(0).toUpperCase() + usage.plan.slice(1)}
-          sub={
-            usage.plan === 'paygo'
-              ? '$0.015 / CU'
-              : '$49/month'
-          }
-        />
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Keys Tab
-// ---------------------------------------------------------------------------
-
-function KeysTab({
-  keys,
-  newKeyName,
-  setNewKeyName,
-  creatingKey,
-  onCreateKey,
-  onRevokeKey,
-}: {
-  keys: KeyInfo[];
-  newKeyName: string;
-  setNewKeyName: (v: string) => void;
-  creatingKey: boolean;
-  onCreateKey: () => void;
-  onRevokeKey: (id: string) => void;
-}) {
-  return (
-    <div>
-      <h2
-        className="text-2xl mb-2"
-        style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}
-      >
-        API Keys
+    <div className="max-w-2xl">
+      <h2 className="text-2xl mb-2" style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}>
+        Build a Tool
       </h2>
       <p className="text-white/40 text-sm mb-6">
-        Use these keys for programmatic access via the SDK or REST API. Each key is shown only once when created.
+        Describe what you need in plain English. Foundry uses AI to generate a working tool in seconds.
       </p>
 
-      {/* Create key */}
-      <div className="flex gap-2 mb-6">
-        <input
-          type="text"
-          value={newKeyName}
-          onChange={(e) => setNewKeyName(e.target.value)}
-          placeholder="Key name (e.g., Production)"
-          className="bg-white/[0.05] border border-white/[0.08] px-4 py-2.5 text-white placeholder-white/30 focus:outline-none focus:border-white/20 flex-1 text-sm"
-          onKeyDown={(e) => e.key === 'Enter' && onCreateKey()}
+      <div className="mb-4">
+        <label className="block text-white/60 text-sm mb-2">What should this tool do?</label>
+        <textarea
+          value={description}
+          onChange={e => setDescription(e.target.value)}
+          rows={4}
+          placeholder="e.g. Calculate the monthly payment for a loan given principal, interest rate, and term in months"
+          className="w-full bg-white/[0.03] border border-white/[0.1] px-4 py-3 text-white placeholder-white/25 focus:outline-none focus:border-white/30 resize-none text-sm"
+          disabled={building}
         />
-        <button
-          onClick={onCreateKey}
-          disabled={creatingKey}
-          className="bg-white text-black px-6 py-2.5 font-medium text-sm hover:bg-white/90 transition-colors disabled:opacity-50 shrink-0"
-        >
-          {creatingKey ? 'Creating...' : 'Create Key'}
-        </button>
+        <p className="text-white/25 text-xs mt-1">{description.length}/2000</p>
       </div>
 
-      {/* Keys table */}
-      <div className="border border-white/[0.08] overflow-hidden">
-        <div className="grid grid-cols-5 gap-4 px-4 py-3 bg-white/[0.03] border-b border-white/[0.08] text-xs text-white/40 uppercase tracking-wider">
-          <div>Name</div>
-          <div>Prefix</div>
-          <div>Created</div>
-          <div>Last Used</div>
-          <div className="text-right">Actions</div>
-        </div>
-
-        {keys.length === 0 ? (
-          <div className="px-4 py-10 text-center text-white/30 text-sm">
-            No API keys yet. Create one above to get started.
-          </div>
-        ) : (
-          keys.map((key) => (
-            <div
-              key={key.key_id}
-              className="grid grid-cols-5 gap-4 px-4 py-3 border-b border-white/[0.04] text-sm items-center"
+      {/* Examples */}
+      <div className="mb-6">
+        <p className="text-white/30 text-xs mb-2">Try an example:</p>
+        <div className="flex flex-wrap gap-2">
+          {examples.map((ex, i) => (
+            <button
+              key={i}
+              onClick={() => setDescription(ex)}
+              className="text-xs px-3 py-1.5 bg-white/[0.04] border border-white/[0.08] text-white/50 hover:text-white hover:border-white/20 transition-colors"
             >
-              <div className="text-white">{key.name}</div>
-              <div className="text-white/50 font-mono text-xs">{key.prefix}...</div>
-              <div className="text-white/40 text-xs">
-                {new Date(key.created_at).toLocaleDateString()}
+              {ex.slice(0, 40)}...
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <button
+        onClick={handleBuild}
+        disabled={building || !description.trim()}
+        className="w-full bg-white text-black py-3 font-medium hover:bg-white/90 transition-colors disabled:opacity-40 flex items-center justify-center gap-2"
+      >
+        {building ? (
+          <>
+            <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
+            Building tool... (10–30s)
+          </>
+        ) : (
+          'Build Tool'
+        )}
+      </button>
+
+      {result && (
+        <div className={`mt-6 p-5 border ${result.success ? 'bg-green-500/10 border-green-500/20' : 'bg-red-500/10 border-red-500/20'}`}>
+          {result.success && result.tool ? (
+            <>
+              <div className="flex items-center gap-2 mb-3">
+                <svg className="w-5 h-5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <span className="text-green-400 font-medium">Tool built successfully!</span>
               </div>
-              <div className="text-white/40 text-xs">
-                {key.last_used_at
-                  ? new Date(key.last_used_at).toLocaleDateString()
-                  : 'Never'}
-              </div>
-              <div className="text-right">
-                <button
-                  onClick={() => onRevokeKey(key.key_id)}
-                  className="text-xs text-red-400/60 hover:text-red-400 transition-colors"
-                >
-                  Revoke
-                </button>
+              <p className="text-white/60 text-sm mb-2">Tool ID: <code className="text-white/80 font-mono">{result.tool.tool_id}</code></p>
+              <p className="text-white/60 text-sm mb-3">Invoke URL: <code className="text-white/80 font-mono text-xs break-all">{result.tool.invoke_url}</code></p>
+              <p className="text-white/40 text-xs">Find this tool in the Tools tab to test it.</p>
+            </>
+          ) : result.error === 'payment_required' ? (
+            <div className="flex items-center justify-between">
+              <span className="text-amber-400 text-sm">Payment required to build tools.</span>
+              <button onClick={onGoToBilling} className="text-xs px-3 py-1.5 bg-amber-500 text-black font-medium">Add Card</button>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2">
+              <svg className="w-5 h-5 text-red-400 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              <div>
+                <p className="text-red-400 font-medium text-sm">Build failed</p>
+                <p className="text-red-400/70 text-xs mt-1">{result.error}</p>
               </div>
             </div>
-          ))
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Tools Tab
+// Tools Tab — list + test panel
 // ---------------------------------------------------------------------------
 
 function ToolsTab({ tools }: { tools: ToolManifest[] }) {
-  const [selectedTool, setSelectedTool] = useState<ToolManifest | null>(null);
+  const [selected, setSelected] = useState<ToolManifest | null>(null);
   const [testInput, setTestInput] = useState('{}');
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testLoading, setTestLoading] = useState(false);
   const [testError, setTestError] = useState<string | null>(null);
 
   const handleTest = async () => {
-    if (!selectedTool) return;
+    if (!selected) return;
     setTestLoading(true);
     setTestResult(null);
     setTestError(null);
 
+    let inputData: Record<string, unknown> = {};
+    try { inputData = JSON.parse(testInput); } catch { setTestError('Invalid JSON'); setTestLoading(false); return; }
+
     try {
-      let inputData: Record<string, unknown> = {};
-      try {
-        inputData = JSON.parse(testInput);
-      } catch {
-        setTestError('Invalid JSON input');
-        setTestLoading(false);
-        return;
-      }
-
-      const apiKey = getActiveApiKey();
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (apiKey) headers['X-API-Key'] = apiKey;
-
-      const res = await fetch(selectedTool.invoke_url, {
+      const res = await fetch('/api/dashboard/tools/invoke', {
         method: 'POST',
-        headers,
-        body: JSON.stringify({ input: inputData }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool_id: selected.tool_id, input: inputData }),
       });
-
       const data = await res.json();
       setTestResult(JSON.stringify(data, null, 2));
     } catch (err) {
@@ -604,121 +543,220 @@ function ToolsTab({ tools }: { tools: ToolManifest[] }) {
   if (tools.length === 0) {
     return (
       <div className="text-center py-16">
-        <p className="text-white/40 mb-2">No tools created yet.</p>
-        <p className="text-white/30 text-sm">
-          Use the API or SDK to create your first tool.
-        </p>
+        <p className="text-white/40 mb-2">No tools yet.</p>
+        <p className="text-white/30 text-sm">Go to the Build tab to create your first tool.</p>
       </div>
     );
   }
 
   return (
-    <div>
-      <h2
-        className="text-2xl mb-4"
-        style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}
-      >
-        Tools
-      </h2>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Tool list */}
-        <div className="space-y-3">
-          {tools.map((tool) => (
-            <div
-              key={tool.tool_id}
-              onClick={() => {
-                setSelectedTool(tool);
-                // Pre-fill with schema example if available
-                if (tool.input_schema?.properties) {
-                  const example: Record<string, unknown> = {};
-                  for (const [k, v] of Object.entries(tool.input_schema.properties as Record<string, {type?: string}>)) {
-                    example[k] = v.type === 'number' ? 0 : v.type === 'boolean' ? false : '';
-                  }
-                  setTestInput(JSON.stringify(example, null, 2));
-                } else {
-                  setTestInput('{}');
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* Tool list */}
+      <div className="space-y-2">
+        <h2 className="text-lg text-white/70 mb-4 font-medium">Your Tools ({tools.length})</h2>
+        {tools.map(tool => (
+          <div
+            key={tool.tool_id}
+            onClick={() => {
+              setSelected(tool);
+              // Auto-fill input from schema
+              if (tool.input_schema && typeof tool.input_schema === 'object' && 'properties' in tool.input_schema) {
+                const props = tool.input_schema.properties as Record<string, { type?: string }>;
+                const ex: Record<string, unknown> = {};
+                for (const [k, v] of Object.entries(props)) {
+                  ex[k] = v.type === 'number' || v.type === 'integer' ? 0 : v.type === 'boolean' ? false : '';
                 }
-                setTestResult(null);
-                setTestError(null);
-              }}
-              className={`bg-white/[0.03] border p-5 cursor-pointer transition-colors ${
-                selectedTool?.tool_id === tool.tool_id
-                  ? 'border-white/30'
-                  : 'border-white/[0.08] hover:border-white/20'
-              }`}
-            >
-              <div className="flex items-start justify-between mb-2">
-                <div>
-                  <h3 className="text-white font-medium">{tool.name}</h3>
-                  <p className="text-white/40 text-sm mt-0.5">{tool.description}</p>
-                </div>
-                <span
-                  className={`px-2 py-0.5 text-[10px] uppercase tracking-wider border ${
-                    tool.status === 'ready'
-                      ? 'text-green-400 border-green-500/20 bg-green-500/10'
-                      : tool.status === 'expired'
-                        ? 'text-yellow-400 border-yellow-500/20 bg-yellow-500/10'
-                        : 'text-red-400 border-red-500/20 bg-red-500/10'
-                  }`}
-                >
-                  {tool.status}
-                </span>
+                setTestInput(JSON.stringify(ex, null, 2));
+              } else {
+                setTestInput('{}');
+              }
+              setTestResult(null);
+              setTestError(null);
+            }}
+            className={`p-4 border cursor-pointer transition-all ${selected?.tool_id === tool.tool_id ? 'border-white/30 bg-white/[0.05]' : 'border-white/[0.07] bg-white/[0.02] hover:border-white/20'}`}
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex-1 min-w-0">
+                <p className="text-white text-sm font-medium truncate">{tool.name}</p>
+                <p className="text-white/40 text-xs mt-0.5 truncate">{tool.description}</p>
               </div>
-              <div className="flex items-center gap-4 mt-3 text-xs text-white/30">
-                <span className="font-mono">{tool.tool_id}</span>
-                <span>Created {new Date(tool.created_at).toLocaleDateString()}</span>
-              </div>
+              <span className={`ml-2 shrink-0 px-1.5 py-0.5 text-[9px] uppercase tracking-wider border ${
+                tool.status === 'ready' ? 'text-green-400 border-green-500/20 bg-green-500/10' : 'text-yellow-400 border-yellow-500/20 bg-yellow-500/10'
+              }`}>{tool.status}</span>
             </div>
-          ))}
-        </div>
+            <p className="text-white/25 text-xs font-mono mt-2">{tool.tool_id}</p>
+          </div>
+        ))}
+      </div>
 
-        {/* Test panel */}
-        {selectedTool ? (
-          <div className="bg-white/[0.02] border border-white/[0.08] p-5">
-            <h3 className="text-white font-medium mb-1">{selectedTool.name}</h3>
-            <p className="text-white/40 text-xs mb-4">Test this tool with custom input</p>
+      {/* Test panel */}
+      <div className="bg-white/[0.02] border border-white/[0.07] p-5">
+        {selected ? (
+          <>
+            <h3 className="text-white font-medium mb-1 text-sm">{selected.name}</h3>
+            <p className="text-white/30 text-xs mb-4">Test with JSON input below</p>
 
-            <label className="block text-white/50 text-xs mb-1.5 uppercase tracking-wider">Input (JSON)</label>
+            <label className="block text-white/40 text-xs uppercase tracking-wider mb-1.5">Input</label>
             <textarea
               value={testInput}
-              onChange={(e) => setTestInput(e.target.value)}
+              onChange={e => setTestInput(e.target.value)}
               rows={6}
-              className="w-full bg-black/30 border border-white/[0.08] px-3 py-2.5 text-sm font-mono text-white placeholder-white/20 focus:outline-none focus:border-white/20 mb-3 resize-none"
+              className="w-full bg-black/30 border border-white/[0.08] px-3 py-2.5 text-sm font-mono text-white focus:outline-none focus:border-white/20 mb-3 resize-none"
             />
 
             <button
               onClick={handleTest}
-              disabled={testLoading || selectedTool.status !== 'ready'}
-              className="w-full bg-white text-black py-2.5 font-medium text-sm hover:bg-white/90 transition-colors disabled:opacity-50 mb-4"
+              disabled={testLoading || selected.status !== 'ready'}
+              className="w-full bg-white text-black py-2.5 text-sm font-medium hover:bg-white/90 transition-colors disabled:opacity-50 mb-4"
             >
               {testLoading ? 'Running...' : 'Run Tool'}
             </button>
 
             {testError && (
-              <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-mono mb-3">
-                {testError}
-              </div>
+              <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-mono mb-3">{testError}</div>
             )}
-
             {testResult && (
-              <div>
-                <label className="block text-white/50 text-xs mb-1.5 uppercase tracking-wider">Result</label>
-                <pre className="bg-black/40 border border-white/[0.06] p-3 text-xs font-mono text-green-300 overflow-x-auto max-h-48">
-                  {testResult}
-                </pre>
-              </div>
+              <>
+                <label className="block text-white/40 text-xs uppercase tracking-wider mb-1.5">Result</label>
+                <pre className="bg-black/40 border border-white/[0.06] p-3 text-xs font-mono text-green-300 overflow-auto max-h-52">{testResult}</pre>
+              </>
             )}
 
             <div className="mt-4 pt-4 border-t border-white/[0.06]">
-              <p className="text-white/30 text-xs mb-1">Invoke URL</p>
-              <code className="text-xs text-white/40 font-mono break-all">{selectedTool.invoke_url}</code>
+              <p className="text-white/20 text-xs font-mono break-all">{selected.invoke_url}</p>
             </div>
-          </div>
+          </>
         ) : (
-          <div className="bg-white/[0.02] border border-white/[0.08] p-5 flex items-center justify-center">
-            <p className="text-white/30 text-sm">← Select a tool to test it</p>
+          <div className="h-full flex items-center justify-center py-16">
+            <p className="text-white/25 text-sm">← Select a tool to test it</p>
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Keys Tab
+// ---------------------------------------------------------------------------
+
+function KeysTab({
+  keys, hasPayment, onKeysChanged, onGoToBilling,
+}: {
+  keys: KeyInfo[];
+  hasPayment: boolean;
+  onKeysChanged: (keys: KeyInfo[]) => void;
+  onGoToBilling: () => void;
+}) {
+  const [newKeyName, setNewKeyName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [newKey, setNewKey] = useState<{ key: string; name: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleCreate = async () => {
+    setCreating(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/dashboard/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newKeyName.trim() || 'Default' }),
+      });
+      const data = await res.json();
+      if (res.status === 402) {
+        setError('payment_required');
+        return;
+      }
+      if (!res.ok) { setError(data.message || data.error || 'Failed'); return; }
+      setNewKey({ key: data.key, name: data.name });
+      setNewKeyName('');
+      // Refresh list
+      const listRes = await fetch('/api/dashboard/keys');
+      const listData = await listRes.json();
+      if (listData.keys) onKeysChanged(listData.keys);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleRevoke = async (keyId: string) => {
+    const res = await fetch(`/api/dashboard/keys?key_id=${keyId}`, { method: 'DELETE' });
+    if (res.ok) onKeysChanged(keys.filter(k => k.key_id !== keyId));
+  };
+
+  return (
+    <div>
+      <h2 className="text-2xl mb-2" style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}>API Keys</h2>
+      <p className="text-white/40 text-sm mb-6">Programmatic access via SDK or REST API. Keys are shown once — copy immediately.</p>
+
+      {/* New key banner */}
+      {newKey && (
+        <div className="mb-6 p-4 bg-green-500/10 border border-green-500/20">
+          <p className="text-green-400 text-sm font-medium mb-2">New key created. Copy now — you won&apos;t see it again.</p>
+          <div className="flex items-stretch gap-2">
+            <code className="flex-1 bg-black/40 border border-white/[0.08] px-3 py-2 text-sm font-mono text-green-300 break-all select-all">{newKey.key}</code>
+            <button
+              onClick={() => { navigator.clipboard.writeText(newKey.key); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+              className="px-4 bg-green-500/20 text-green-400 text-sm hover:bg-green-500/30 transition-colors shrink-0"
+            >
+              {copied ? 'Copied!' : 'Copy'}
+            </button>
+            <button onClick={() => setNewKey(null)} className="px-3 text-white/40 hover:text-white">✕</button>
+          </div>
+        </div>
+      )}
+
+      {/* Payment gate */}
+      {!hasPayment ? (
+        <div className="p-6 border border-amber-500/20 bg-amber-500/5 mb-6">
+          <p className="text-amber-400 text-sm mb-3">A payment method is required to create API keys.</p>
+          <button onClick={onGoToBilling} className="px-4 py-2 bg-amber-500 text-black text-sm font-medium hover:bg-amber-400">Add Payment Method</button>
+        </div>
+      ) : (
+        <div className="flex gap-2 mb-6">
+          <input
+            type="text"
+            value={newKeyName}
+            onChange={e => setNewKeyName(e.target.value)}
+            placeholder="Key name (e.g. Production)"
+            className="flex-1 bg-white/[0.04] border border-white/[0.08] px-4 py-2.5 text-white placeholder-white/25 focus:outline-none focus:border-white/20 text-sm"
+            onKeyDown={e => e.key === 'Enter' && handleCreate()}
+          />
+          <button onClick={handleCreate} disabled={creating} className="bg-white text-black px-6 py-2.5 font-medium text-sm hover:bg-white/90 disabled:opacity-50 shrink-0">
+            {creating ? 'Creating...' : 'Create Key'}
+          </button>
+        </div>
+      )}
+
+      {error === 'payment_required' && (
+        <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/20 text-amber-400 text-sm">Payment required. <button onClick={onGoToBilling} className="underline">Add card →</button></div>
+      )}
+      {error && error !== 'payment_required' && (
+        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-sm">{error}</div>
+      )}
+
+      {/* Keys table */}
+      <div className="border border-white/[0.07] overflow-hidden">
+        <div className="grid grid-cols-5 gap-4 px-4 py-3 bg-white/[0.02] border-b border-white/[0.07] text-xs text-white/30 uppercase tracking-wider">
+          <div>Name</div><div>Prefix</div><div>Created</div><div>Last Used</div><div className="text-right">Actions</div>
+        </div>
+        {keys.filter(k => k.name !== '__server_session__').length === 0 ? (
+          <div className="px-4 py-10 text-center text-white/25 text-sm">No API keys yet. Create one above.</div>
+        ) : (
+          keys.filter(k => k.name !== '__server_session__').map(key => (
+            <div key={key.key_id} className="grid grid-cols-5 gap-4 px-4 py-3 border-b border-white/[0.04] text-sm items-center">
+              <div className="text-white">{key.name}</div>
+              <div className="text-white/40 font-mono text-xs">{key.prefix}...</div>
+              <div className="text-white/30 text-xs">{new Date(key.created_at).toLocaleDateString()}</div>
+              <div className="text-white/30 text-xs">{key.last_used_at ? new Date(key.last_used_at).toLocaleDateString() : 'Never'}</div>
+              <div className="text-right">
+                <button onClick={() => handleRevoke(key.key_id)} className="text-xs text-red-400/50 hover:text-red-400 transition-colors">Revoke</button>
+              </div>
+            </div>
+          ))
         )}
       </div>
     </div>
@@ -730,67 +768,32 @@ function ToolsTab({ tools }: { tools: ToolManifest[] }) {
 // ---------------------------------------------------------------------------
 
 function ActivityTab({ events }: { events: UsageEvent[] }) {
-  const typeLabels: Record<string, string> = {
-    tool_build: 'Build',
-    tool_invoke: 'Invoke',
-    search: 'Search',
-  };
-
-  const typeColors: Record<string, string> = {
-    tool_build: 'text-pink-400',
-    tool_invoke: 'text-orange-400',
-    search: 'text-green-400',
-  };
+  const labels: Record<string, string> = { tool_build: 'Build', tool_invoke: 'Invoke', search: 'Search' };
+  const colors: Record<string, string> = { tool_build: 'text-pink-400', tool_invoke: 'text-orange-400', search: 'text-green-400' };
 
   if (events.length === 0) {
     return (
       <div className="text-center py-16">
         <p className="text-white/40 mb-2">No activity yet.</p>
-        <p className="text-white/30 text-sm">
-          API calls will show up here as you use Foundry.
-        </p>
+        <p className="text-white/30 text-sm">API calls will appear here as you use Foundry.</p>
       </div>
     );
   }
 
   return (
     <div>
-      <h2
-        className="text-2xl mb-4"
-        style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}
-      >
-        Recent Activity
-      </h2>
-
-      <div className="border border-white/[0.08] overflow-hidden">
-        <div className="grid grid-cols-5 gap-4 px-4 py-3 bg-white/[0.03] border-b border-white/[0.08] text-xs text-white/40 uppercase tracking-wider">
-          <div>Type</div>
-          <div>Tool</div>
-          <div>Duration</div>
-          <div>Tokens</div>
-          <div>Time</div>
+      <h2 className="text-2xl mb-4" style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}>Recent Activity</h2>
+      <div className="border border-white/[0.07] overflow-hidden">
+        <div className="grid grid-cols-5 gap-4 px-4 py-3 bg-white/[0.02] border-b border-white/[0.07] text-xs text-white/30 uppercase tracking-wider">
+          <div>Type</div><div>Tool</div><div>Duration</div><div>Tokens</div><div>Time</div>
         </div>
-
-        {events.map((event, i) => (
-          <div
-            key={i}
-            className="grid grid-cols-5 gap-4 px-4 py-3 border-b border-white/[0.04] text-sm items-center"
-          >
-            <div className={typeColors[event.event_type] || 'text-white/50'}>
-              {typeLabels[event.event_type] || event.event_type}
-            </div>
-            <div className="text-white/40 font-mono text-xs truncate">
-              {event.tool_id || '—'}
-            </div>
-            <div className="text-white/40 text-xs">
-              {event.execution_time_ms > 0 ? `${event.execution_time_ms}ms` : '—'}
-            </div>
-            <div className="text-white/40 text-xs">
-              {event.tokens_used > 0 ? event.tokens_used.toLocaleString() : '—'}
-            </div>
-            <div className="text-white/30 text-xs">
-              {new Date(event.created_at).toLocaleString()}
-            </div>
+        {events.map((e, i) => (
+          <div key={i} className="grid grid-cols-5 gap-4 px-4 py-3 border-b border-white/[0.03] text-sm items-center">
+            <div className={colors[e.event_type] || 'text-white/50'}>{labels[e.event_type] || e.event_type}</div>
+            <div className="text-white/40 font-mono text-xs truncate">{e.tool_id || '—'}</div>
+            <div className="text-white/30 text-xs">{e.execution_time_ms > 0 ? `${e.execution_time_ms}ms` : '—'}</div>
+            <div className="text-white/30 text-xs">{e.tokens_used > 0 ? e.tokens_used.toLocaleString() : '—'}</div>
+            <div className="text-white/25 text-xs">{new Date(e.created_at).toLocaleString()}</div>
           </div>
         ))}
       </div>
@@ -803,213 +806,118 @@ function ActivityTab({ events }: { events: UsageEvent[] }) {
 // ---------------------------------------------------------------------------
 
 function BillingTab({
-  billing,
-  plan,
+  billing, plan, orgId, onPaymentAdded,
 }: {
-  billing: BillingStatus | null;
+  billing: BillingInfo | null;
   plan: string;
+  orgId: string;
+  onPaymentAdded: () => void;
 }) {
-  const [upgrading, setUpgrading] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const handleUpgrade = async (productId: string) => {
-    setUpgrading(true);
+  const handleCheckout = async (productId: string) => {
+    setLoading(true);
     try {
-      const res = await createCheckout(
-        productId,
-        `${window.location.origin}/dashboard?upgraded=1`,
-      );
-      if (res.checkout_url) {
-        window.location.href = res.checkout_url;
+      const res = await fetch('/api/dashboard/billing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product_id: productId }),
+      });
+      const data = await res.json();
+      if (data.checkout_url) {
+        window.location.href = data.checkout_url;
       }
-    } catch {
-      // Fall through
     } finally {
-      setUpgrading(false);
+      setLoading(false);
     }
   };
 
-  const planDetails: Record<string, { price: string; desc: string }> = {
-    paygo: { price: '$0.015 / CU', desc: 'No monthly fee — pay for what you use' },
-    pro: { price: '$49/mo', desc: '10,000 CU included, then $0.008 / CU' },
-  };
-
-  const currentPlan = planDetails[plan] || planDetails.paygo;
+  const hasPaid = billing?.has_payment_method;
 
   return (
-    <div>
-      <h2
-        className="text-2xl mb-6"
-        style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}
-      >
-        Billing
-      </h2>
+    <div className="max-w-lg">
+      <h2 className="text-2xl mb-6" style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}>Billing</h2>
 
-      {/* Current plan */}
-      <div className="bg-white/[0.03] border border-white/[0.08] p-6 mb-6">
-        <div className="flex items-center justify-between mb-4">
+      {/* Payment status */}
+      <div className={`p-5 border mb-6 ${hasPaid ? 'border-green-500/20 bg-green-500/5' : 'border-amber-500/20 bg-amber-500/5'}`}>
+        <div className="flex items-center gap-3">
+          <div className={`w-2.5 h-2.5 rounded-full ${hasPaid ? 'bg-green-400' : 'bg-amber-400'}`} />
           <div>
-            <span className="text-white/40 text-xs uppercase tracking-wider">Current Plan</span>
-            <div
-              className="text-3xl mt-1"
-              style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}
-            >
-              {plan === 'paygo' ? 'Pay As You Go' : plan.charAt(0).toUpperCase() + plan.slice(1)}
-            </div>
-            <span className="text-white/40 text-sm">{currentPlan.price}</span>
-          </div>
-          <div className="text-right">
-            <span className="text-white/30 text-sm">{currentPlan.desc}</span>
+            <p className={`text-sm font-medium ${hasPaid ? 'text-green-400' : 'text-amber-400'}`}>
+              {hasPaid ? 'Payment method on file' : 'No payment method'}
+            </p>
+            <p className="text-white/40 text-xs mt-0.5">
+              {hasPaid
+                ? 'Your account is active. Usage is billed monthly.'
+                : 'Add a card to build tools and create API keys.'}
+            </p>
           </div>
         </div>
       </div>
 
-      {/* Feature usage from Autumn */}
-      {billing?.autumn_enabled && billing.features && (
-        <div className="mb-6">
-          <h3 className="text-white/60 text-sm font-medium mb-3 uppercase tracking-wider">
-            Feature Usage
-          </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            {Object.entries(billing.features).map(([featureId, info]) => {
-              const used = info.usage ?? 0;
-              const included = info.included_usage ?? 0;
-              const pct = included > 0 ? (used / included) * 100 : 0;
-
-              return (
-                <div
-                  key={featureId}
-                  className="bg-white/[0.03] border border-white/[0.08] p-5"
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-white/40 text-xs uppercase tracking-wider capitalize">
-                      {featureId}
-                    </span>
-                    {info.unlimited ? (
-                      <span className="text-[10px] text-green-400">Unlimited</span>
-                    ) : (
-                      <span className={`text-[10px] ${pct > 80 ? 'text-red-400' : 'text-white/40'}`}>
-                        {pct.toFixed(0)}%
-                      </span>
-                    )}
-                  </div>
-                  <div
-                    className="text-2xl mb-2"
-                    style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}
-                  >
-                    {used.toLocaleString()}
-                    {!info.unlimited && (
-                      <span className="text-white/20 text-lg"> / {included.toLocaleString()}</span>
-                    )}
-                  </div>
-                  {!info.unlimited && (
-                    <div className="w-full h-1 bg-white/[0.05] rounded-full overflow-hidden">
-                      <div
-                        className={`h-full transition-all duration-500 ${
-                          pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-orange-500' : 'bg-green-500'
-                        }`}
-                        style={{ width: `${Math.min(pct, 100)}%` }}
-                      />
-                    </div>
-                  )}
-                  {!info.allowed && (
-                    <p className="text-red-400 text-xs mt-2">Limit reached — upgrade to continue</p>
-                  )}
-                </div>
-              );
-            })}
+      {/* Plans */}
+      <div className="space-y-4 mb-6">
+        <div className={`p-5 border ${plan === 'paygo' ? 'border-white/30' : 'border-white/[0.07]'}`}>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-white font-medium">Pay As You Go</span>
+            {plan === 'paygo' && <span className="text-xs px-2 py-0.5 bg-white/10 text-white/60 border border-white/20">Current</span>}
           </div>
-        </div>
-      )}
-
-      {/* Upgrade CTA */}
-      {plan !== 'pro' && (
-        <div className="bg-white/[0.03] border border-white/[0.08] p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-white font-medium mb-1">Upgrade to Pro</h3>
-              <p className="text-white/40 text-sm">
-                $49/mo — 10,000 CU included, priority builds, Exa search
-              </p>
-            </div>
+          <p className="text-white/40 text-sm mb-3">$0.015 per build · $0.001 per invocation · No monthly fee</p>
+          {!hasPaid && (
             <button
-              onClick={() => handleUpgrade('pro')}
-              disabled={upgrading}
-              className="bg-white text-black px-6 py-2.5 font-medium text-sm hover:bg-white/90 transition-colors disabled:opacity-50 shrink-0"
+              onClick={() => handleCheckout('paygo')}
+              disabled={loading}
+              className="px-4 py-2 bg-white text-black text-sm font-medium hover:bg-white/90 transition-colors disabled:opacity-50"
             >
-              {upgrading ? 'Loading...' : 'Upgrade'}
+              {loading ? 'Loading...' : 'Add Card & Activate'}
             </button>
+          )}
+        </div>
+
+        <div className={`p-5 border ${plan === 'pro' ? 'border-white/30' : 'border-white/[0.07]'}`}>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-white font-medium">Pro</span>
+            {plan === 'pro' && <span className="text-xs px-2 py-0.5 bg-white/10 text-white/60 border border-white/20">Current</span>}
+          </div>
+          <p className="text-white/40 text-sm mb-3">$49/month · 10,000 CU included · then $0.008 / CU</p>
+          {plan !== 'pro' && (
+            <button
+              onClick={() => handleCheckout('pro')}
+              disabled={loading}
+              className="px-4 py-2 bg-white text-black text-sm font-medium hover:bg-white/90 transition-colors disabled:opacity-50"
+            >
+              {loading ? 'Loading...' : hasPaid ? 'Upgrade to Pro' : 'Add Card & Upgrade'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Feature usage */}
+      {billing?.autumn_enabled && billing.features && (
+        <div className="border border-white/[0.07] p-5">
+          <h3 className="text-white/50 text-xs uppercase tracking-wider mb-4">This Month&apos;s Usage</h3>
+          <div className="space-y-3">
+            {Object.entries(billing.features).map(([featureId, info]) => (
+              <div key={featureId}>
+                <div className="flex justify-between text-sm mb-1">
+                  <span className="text-white/60 capitalize">{featureId}</span>
+                  <span className="text-white/40 text-xs">
+                    {info.usage ?? 0}{info.included_usage ? ` / ${info.included_usage}` : ''}
+                  </span>
+                </div>
+                {info.included_usage && info.included_usage > 0 && (
+                  <div className="h-1 bg-white/[0.06] overflow-hidden">
+                    <div
+                      className="h-full bg-white/40"
+                      style={{ width: `${Math.min(100, ((info.usage ?? 0) / info.included_usage) * 100)}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Shared components
-// ---------------------------------------------------------------------------
-
-function UsageCard({
-  label,
-  current,
-  limit,
-  color,
-}: {
-  label: string;
-  current: number;
-  limit: number;
-  color: 'pink' | 'orange' | 'green';
-}) {
-  const pct = limit > 0 ? (current / limit) * 100 : 0;
-  const colorMap = {
-    pink: { bar: 'bg-pink-500', text: 'text-pink-400' },
-    orange: { bar: 'bg-orange-500', text: 'text-orange-400' },
-    green: { bar: 'bg-green-500', text: 'text-green-400' },
-  };
-  const c = colorMap[color];
-
-  return (
-    <div className="bg-white/[0.03] border border-white/[0.08] p-5">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-white/40 text-xs uppercase tracking-wider">{label}</span>
-        <span className={`text-[10px] ${c.text}`}>{pct.toFixed(0)}%</span>
-      </div>
-      <div
-        className="text-3xl mb-3"
-        style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}
-      >
-        {current.toLocaleString()}
-        <span className="text-white/20 text-lg"> / {limit.toLocaleString()}</span>
-      </div>
-      <div className="w-full h-1 bg-white/[0.05] rounded-full overflow-hidden">
-        <div
-          className={`h-full ${c.bar} transition-all duration-500`}
-          style={{ width: `${Math.min(pct, 100)}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  sub,
-}: {
-  label: string;
-  value: string;
-  sub: string;
-}) {
-  return (
-    <div className="bg-white/[0.03] border border-white/[0.08] p-5">
-      <span className="text-white/40 text-xs uppercase tracking-wider">{label}</span>
-      <div
-        className="text-2xl mt-1"
-        style={{ fontFamily: 'var(--font-instrument), Georgia, serif' }}
-      >
-        {value}
-      </div>
-      <span className="text-white/30 text-xs">{sub}</span>
     </div>
   );
 }
