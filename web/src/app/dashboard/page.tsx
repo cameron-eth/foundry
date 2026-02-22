@@ -12,6 +12,7 @@ import {
   getBillingStatus,
   createCheckout,
   setActiveApiKey,
+  getActiveApiKey,
   getUsageWithKey,
   getDetailedUsageWithKey,
   ApiError,
@@ -60,6 +61,11 @@ export default function DashboardPage() {
   // Active tab
   const [tab, setTab] = useState<'overview' | 'keys' | 'tools' | 'activity' | 'billing'>('overview');
 
+  // API key entry (for users who haven't stored a key yet)
+  const [hasApiKey, setHasApiKey] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [apiKeyError, setApiKeyError] = useState('');
+
   // Track if we've loaded (avoid double-fetch)
   const initialized = useRef(false);
 
@@ -86,10 +92,9 @@ export default function DashboardPage() {
       setOrgPlan(orgData.plan);
       setKeyPrefix(orgData.key_prefix);
 
-      // Note: we don't have the full API key here (only prefix for display).
-      // FastAPI calls that require X-API-Key will use the key from localStorage
-      // if the user set one, or will fail with 401. Users must use the Keys tab
-      // to get their key and the SDK. Dashboard data is loaded via org context.
+      // Check if we have an API key in memory/localStorage
+      const activeKey = getActiveApiKey();
+      setHasApiKey(!!activeKey);
 
       // 2. Load dashboard data (these use X-API-Key from localStorage if present)
       const [usageRes, detailedRes, keysRes, toolsRes, billingRes] = await Promise.allSettled([
@@ -163,6 +168,21 @@ export default function DashboardPage() {
   const handleSignOut = async () => {
     await signOut();
     router.push('/');
+  };
+
+  const handleSetApiKey = async () => {
+    const key = apiKeyInput.trim();
+    if (!key.startsWith('fnd_')) {
+      setApiKeyError('Key must start with fnd_');
+      return;
+    }
+    setApiKeyError('');
+    setActiveApiKey(key);
+    setHasApiKey(true);
+    setApiKeyInput('');
+    // Reload data with the new key
+    initialized.current = false;
+    loadAll();
   };
 
   const handleCopyKey = (key: string) => {
@@ -255,6 +275,33 @@ export default function DashboardPage() {
                 className="px-3 text-white/40 text-sm hover:text-white transition-colors"
               >
                 Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* API key prompt — shown when no key is stored */}
+        {!hasApiKey && (
+          <div className="mb-6 p-4 bg-yellow-500/10 border border-yellow-500/20">
+            <p className="text-yellow-400 text-sm font-medium mb-3">
+              Enter your API key to load usage data and test tools.
+              <span className="text-yellow-400/60 font-normal"> (Or go to the Keys tab to create a new one.)</span>
+            </p>
+            {apiKeyError && <p className="text-red-400 text-xs mb-2">{apiKeyError}</p>}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={apiKeyInput}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                placeholder="fnd_..."
+                className="flex-1 bg-black/30 border border-yellow-500/20 px-3 py-2 text-white text-sm font-mono placeholder-white/20 focus:outline-none focus:border-yellow-400/40"
+                onKeyDown={(e) => e.key === 'Enter' && handleSetApiKey()}
+              />
+              <button
+                onClick={handleSetApiKey}
+                className="px-4 py-2 bg-yellow-500/20 text-yellow-400 text-sm font-medium hover:bg-yellow-500/30 transition-colors shrink-0"
+              >
+                Use Key
               </button>
             </div>
           </div>
@@ -513,6 +560,47 @@ function KeysTab({
 // ---------------------------------------------------------------------------
 
 function ToolsTab({ tools }: { tools: ToolManifest[] }) {
+  const [selectedTool, setSelectedTool] = useState<ToolManifest | null>(null);
+  const [testInput, setTestInput] = useState('{}');
+  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testLoading, setTestLoading] = useState(false);
+  const [testError, setTestError] = useState<string | null>(null);
+
+  const handleTest = async () => {
+    if (!selectedTool) return;
+    setTestLoading(true);
+    setTestResult(null);
+    setTestError(null);
+
+    try {
+      let inputData: Record<string, unknown> = {};
+      try {
+        inputData = JSON.parse(testInput);
+      } catch {
+        setTestError('Invalid JSON input');
+        setTestLoading(false);
+        return;
+      }
+
+      const apiKey = getActiveApiKey();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (apiKey) headers['X-API-Key'] = apiKey;
+
+      const res = await fetch(selectedTool.invoke_url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ input: inputData }),
+      });
+
+      const data = await res.json();
+      setTestResult(JSON.stringify(data, null, 2));
+    } catch (err) {
+      setTestError(err instanceof Error ? err.message : 'Request failed');
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
   if (tools.length === 0) {
     return (
       <div className="text-center py-16">
@@ -533,43 +621,105 @@ function ToolsTab({ tools }: { tools: ToolManifest[] }) {
         Tools
       </h2>
 
-      <div className="space-y-3">
-        {tools.map((tool) => (
-          <div
-            key={tool.tool_id}
-            className="bg-white/[0.03] border border-white/[0.08] p-5"
-          >
-            <div className="flex items-start justify-between mb-2">
-              <div>
-                <h3 className="text-white font-medium">{tool.name}</h3>
-                <p className="text-white/40 text-sm mt-0.5">{tool.description}</p>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Tool list */}
+        <div className="space-y-3">
+          {tools.map((tool) => (
+            <div
+              key={tool.tool_id}
+              onClick={() => {
+                setSelectedTool(tool);
+                // Pre-fill with schema example if available
+                if (tool.input_schema?.properties) {
+                  const example: Record<string, unknown> = {};
+                  for (const [k, v] of Object.entries(tool.input_schema.properties as Record<string, {type?: string}>)) {
+                    example[k] = v.type === 'number' ? 0 : v.type === 'boolean' ? false : '';
+                  }
+                  setTestInput(JSON.stringify(example, null, 2));
+                } else {
+                  setTestInput('{}');
+                }
+                setTestResult(null);
+                setTestError(null);
+              }}
+              className={`bg-white/[0.03] border p-5 cursor-pointer transition-colors ${
+                selectedTool?.tool_id === tool.tool_id
+                  ? 'border-white/30'
+                  : 'border-white/[0.08] hover:border-white/20'
+              }`}
+            >
+              <div className="flex items-start justify-between mb-2">
+                <div>
+                  <h3 className="text-white font-medium">{tool.name}</h3>
+                  <p className="text-white/40 text-sm mt-0.5">{tool.description}</p>
+                </div>
+                <span
+                  className={`px-2 py-0.5 text-[10px] uppercase tracking-wider border ${
+                    tool.status === 'ready'
+                      ? 'text-green-400 border-green-500/20 bg-green-500/10'
+                      : tool.status === 'expired'
+                        ? 'text-yellow-400 border-yellow-500/20 bg-yellow-500/10'
+                        : 'text-red-400 border-red-500/20 bg-red-500/10'
+                  }`}
+                >
+                  {tool.status}
+                </span>
               </div>
-              <span
-                className={`px-2 py-0.5 text-[10px] uppercase tracking-wider border ${
-                  tool.status === 'ready'
-                    ? 'text-green-400 border-green-500/20 bg-green-500/10'
-                    : tool.status === 'expired'
-                      ? 'text-yellow-400 border-yellow-500/20 bg-yellow-500/10'
-                      : 'text-red-400 border-red-500/20 bg-red-500/10'
-                }`}
-              >
-                {tool.status}
-              </span>
+              <div className="flex items-center gap-4 mt-3 text-xs text-white/30">
+                <span className="font-mono">{tool.tool_id}</span>
+                <span>Created {new Date(tool.created_at).toLocaleDateString()}</span>
+              </div>
             </div>
-            <div className="flex items-center gap-4 mt-3 text-xs text-white/30">
-              <span className="font-mono">{tool.tool_id}</span>
-              <span>Created {new Date(tool.created_at).toLocaleDateString()}</span>
-              {tool.expires_at && (
-                <span>Expires {new Date(tool.expires_at).toLocaleDateString()}</span>
-              )}
-            </div>
-            <div className="mt-3">
-              <code className="text-xs text-white/40 font-mono bg-black/20 px-2 py-1 border border-white/[0.04]">
-                POST {tool.invoke_url}
-              </code>
+          ))}
+        </div>
+
+        {/* Test panel */}
+        {selectedTool ? (
+          <div className="bg-white/[0.02] border border-white/[0.08] p-5">
+            <h3 className="text-white font-medium mb-1">{selectedTool.name}</h3>
+            <p className="text-white/40 text-xs mb-4">Test this tool with custom input</p>
+
+            <label className="block text-white/50 text-xs mb-1.5 uppercase tracking-wider">Input (JSON)</label>
+            <textarea
+              value={testInput}
+              onChange={(e) => setTestInput(e.target.value)}
+              rows={6}
+              className="w-full bg-black/30 border border-white/[0.08] px-3 py-2.5 text-sm font-mono text-white placeholder-white/20 focus:outline-none focus:border-white/20 mb-3 resize-none"
+            />
+
+            <button
+              onClick={handleTest}
+              disabled={testLoading || selectedTool.status !== 'ready'}
+              className="w-full bg-white text-black py-2.5 font-medium text-sm hover:bg-white/90 transition-colors disabled:opacity-50 mb-4"
+            >
+              {testLoading ? 'Running...' : 'Run Tool'}
+            </button>
+
+            {testError && (
+              <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-mono mb-3">
+                {testError}
+              </div>
+            )}
+
+            {testResult && (
+              <div>
+                <label className="block text-white/50 text-xs mb-1.5 uppercase tracking-wider">Result</label>
+                <pre className="bg-black/40 border border-white/[0.06] p-3 text-xs font-mono text-green-300 overflow-x-auto max-h-48">
+                  {testResult}
+                </pre>
+              </div>
+            )}
+
+            <div className="mt-4 pt-4 border-t border-white/[0.06]">
+              <p className="text-white/30 text-xs mb-1">Invoke URL</p>
+              <code className="text-xs text-white/40 font-mono break-all">{selectedTool.invoke_url}</code>
             </div>
           </div>
-        ))}
+        ) : (
+          <div className="bg-white/[0.02] border border-white/[0.08] p-5 flex items-center justify-center">
+            <p className="text-white/30 text-sm">← Select a tool to test it</p>
+          </div>
+        )}
       </div>
     </div>
   );
