@@ -5,8 +5,8 @@ export async function proxy(req: NextRequest) {
   const session = await auth.api.getSession({ headers: req.headers });
   const { pathname } = req.nextUrl;
 
-  // Protect dashboard routes
-  if (pathname.startsWith("/dashboard") && !session) {
+  // Protect dashboard and setup routes — require session
+  if ((pathname.startsWith("/dashboard") || pathname === "/setup") && !session) {
     return NextResponse.redirect(new URL("/login", req.url));
   }
 
@@ -19,5 +19,5 @@ export async function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/login", "/signup"],
+  matcher: ["/dashboard/:path*", "/login", "/signup", "/setup"],
 };
