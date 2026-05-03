@@ -216,8 +216,8 @@ class AutumnClient:
         customer_id: str,
         product_id: str,
         *,
-        success_url: str = "https://foundry.ai/dashboard?upgraded=1",
-        cancel_url: str = "https://foundry.ai/pricing",
+        success_url: str = "http://localhost:3000/dashboard?upgraded=1",
+        cancel_url: str = "http://localhost:3000/pricing",
         customer_data: Optional[Dict[str, Any]] = None,
     ) -> CheckoutResult:
         """Create a Stripe checkout session via Autumn.

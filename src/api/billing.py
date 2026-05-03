@@ -92,8 +92,8 @@ async def create_checkout(
             detail=f"Invalid product_id '{request.product_id}'. Choose from: {', '.join(sorted(valid_products))}",
         )
 
-    success_url = request.success_url or "https://foundry.ai/dashboard?upgraded=1"
-    cancel_url = request.cancel_url or "https://foundry.ai/pricing"
+    success_url = request.success_url or "http://localhost:3000/dashboard?upgraded=1"
+    cancel_url = request.cancel_url or "http://localhost:3000/pricing"
 
     result = await autumn.checkout(
         customer_id=auth.org_id,

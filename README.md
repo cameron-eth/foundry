@@ -1,618 +1,333 @@
-# Tool Foundry
+# Foundry
 
-Dynamic tool creation and execution service for AI agents. Built on [Modal](https://modal.com) for zero-infrastructure serverless deployment.
+Dynamic tool creation and execution service for AI agents. Describe what you need in plain English, get production-ready Python tools deployed in seconds.
 
-## Why Modal?
+Built on [Modal](https://modal.com) for zero-infrastructure serverless deployment.
 
-Modal is a Python-native serverless platform that's perfect for this use case:
+## What It Does
 
-- **Dynamic function deployment** - Deploy Python functions at runtime with a single API call
-- **Built-in sandboxing** - Each function runs in isolated containers
-- **No infrastructure** - No Terraform, no VPC, no IAM roles
-- **Fast cold starts** - ~100-200ms
-- **Native Python SDK** - Deploy with decorators or programmatically
-- **Pay-per-use** - Only pay for compute time
-- **Built-in secrets** - Secure secret management
+Foundry lets AI agents build custom tools at runtime:
 
-## Architecture Overview
+1. **Describe** a capability in natural language (`"Calculate compound interest"`)
+2. **Get** validated, sandboxed Python code generated automatically
+3. **Invoke** the tool via REST API with typed inputs/outputs
 
-```mermaid
-flowchart TB
-    subgraph agent [Agent Runtime]
-        AR[Agent]
-    end
-    
-    subgraph modal [Modal Platform]
-        API[Foundry API - Web Endpoint]
-        Registry[Registry - Dict/Neon]
-        Builder[Tool Builder]
-        Functions[Dynamic Functions]
-    end
-    
-    subgraph events [Event Backend]
-        Events[System Events API]
-    end
-    
-    AR -->|"POST /tools"| API
-    AR -->|"GET /manifest"| API
-    AR -->|"POST /invoke"| API
-    
-    API --> Registry
-    API --> Builder
-    Builder -->|"modal.Function.from_code"| Functions
-    Builder -->|"Tool Ready"| Events
-    Events -->|"System Event"| AR
-    
-    API -->|"function.remote"| Functions
-```
+Tools run in isolated Modal Sandboxes with no filesystem, network, or system access. Code is validated via AST analysis before execution.
 
 ## Quick Start
 
 ### Prerequisites
 
 - Python 3.11+
-- Modal account (free tier available at https://modal.com)
-- Anthropic API key (for AI-driven tool generation)
+- A [Modal](https://modal.com) account (free tier available)
+- An Anthropic or OpenAI API key
 
-### Option 1: Automated Setup (Recommended)
+### 1. Clone and install
 
 ```bash
-# Make the deployment script executable
-chmod +x deploy.sh
-
-# Run setup (installs Modal, authenticates, configures secrets)
-./deploy.sh setup
-
-# Deploy to Modal
-./deploy.sh deploy
+git clone https://github.com/cameron-eth/foundry.git
+cd foundry
+pip install modal
 ```
 
-### Option 2: Manual Setup
+### 2. Authenticate with Modal
 
 ```bash
-# 1. Install dependencies
-pip install modal fastapi pydantic httpx anthropic
-
-# 2. Authenticate with Modal (opens browser)
 modal token new
+```
 
-# 3. Create required secrets
-modal secret create anthropic-credentials ANTHROPIC_API_KEY=your-api-key
+### 3. Create secrets
 
-# Optional: Enable web search in tools
-modal secret create exa-credentials EXA_API_KEY=your-exa-key
+You need at least one LLM provider:
 
-# 4. Deploy
+```bash
+# Anthropic (recommended)
+modal secret create anthropic-credentials ANTHROPIC_API_KEY=sk-ant-...
+
+# OpenAI (alternative or additional)
+modal secret create openai-credentials OPENAI_API_KEY=sk-...
+```
+
+Create the branding/config secret (required):
+
+```bash
+modal secret create foundry-branding \
+  FOUNDRY_LLM_PROVIDER=anthropic \
+  FOUNDRY_AGENT_MODEL=claude-sonnet-4-20250514 \
+  FOUNDRY_API_TITLE="My Foundry Instance"
+```
+
+Optional secrets for extra features:
+
+```bash
+# Web search (Brave Search — free tier: 2000 queries/month)
+modal secret create brave-credentials BRAVE_API_KEY=...
+
+# Exa search (alternative search provider)
+modal secret create exa-credentials EXA_API_KEY=...
+```
+
+### 4. Deploy
+
+```bash
 modal deploy foundry.py
 ```
 
-That's it. No Terraform, no AWS console, no VPC configuration.
-
-### Your Deployment URL
-
-After deployment, your API will be available at:
+Your API is now live at:
 ```
-https://{your-modal-workspace}--toolfoundry-serve.modal.run
+https://{your-workspace}--toolfoundry-serve.modal.run
 ```
 
-Find your workspace ID in the deployment output or Modal dashboard.
-
-### Required Secrets
-
-| Secret Name | Variables | Purpose |
-|-------------|-----------|---------|
-| `anthropic-credentials` | `ANTHROPIC_API_KEY` | **Required** for AI tool generation |
-| `exa-credentials` | `EXA_API_KEY` | Optional: enables web search in tools |
-
-### Optional Environment Variables
-
-Set these in Modal dashboard or via CLI for advanced configuration:
+### Or use the interactive deploy script
 
 ```bash
-# Optional: Event emission to external API
-modal secret create foundry-credentials \
-  FOUNDRY_EVENT_API_URL=https://api.example.com \
-  FOUNDRY_EVENT_API_KEY=your-event-api-key
-
-# Optional: API key authentication
-# TOOLFOUNDRY_REQUIRE_AUTH=true
-# TOOLFOUNDRY_API_KEYS=key1,key2,key3
+chmod +x deploy.sh
+./deploy.sh setup    # Interactive first-time setup wizard
+./deploy.sh deploy   # Deploy to Modal
+./deploy.sh serve    # Local dev with hot reload
+./deploy.sh status   # Check deployment status
+./deploy.sh branding # Customize Swagger docs appearance
 ```
 
-### Test It
+## Usage
+
+### Create a tool from a description
 
 ```bash
-# Create a simple tool
-curl -X POST https://your-workspace--tool-foundry-foundry-api.modal.run/v1/tools \
+curl -X POST https://YOUR-WORKSPACE--toolfoundry-serve.modal.run/v1/construct \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "add_numbers",
-    "description": "Add two numbers together",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "a": {"type": "number"},
-        "b": {"type": "number"}
-      },
-      "required": ["a", "b"]
-    },
-    "implementation": "def main(a: float, b: float) -> float:\n    return a + b",
-    "org_id": "test",
-    "conversation_id": "test-conv"
+    "capability_description": "Calculate compound interest given principal, rate, and years",
+    "org_id": "my-org",
+    "conversation_id": "demo"
   }'
+```
 
-# Invoke the tool
-curl -X POST https://your-workspace--tool-foundry-foundry-api.modal.run/v1/tools/{tool_id}:invoke \
+Response:
+```json
+{
+  "request_id": "req-abc123",
+  "tool_id": "tool-def456",
+  "status": "ready",
+  "invoke_url": ".../v1/tools/tool-def456/invoke"
+}
+```
+
+### Invoke a tool
+
+```bash
+curl -X POST .../v1/tools/tool-def456/invoke \
   -H "Content-Type: application/json" \
-  -d '{"input": {"a": 5, "b": 3}}'
+  -d '{"input": {"principal": 1000, "rate": 0.05, "years": 10}}'
+```
+
+### Create a tool with explicit code
+
+```bash
+curl -X POST .../v1/tools \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "add",
+    "description": "Add two numbers",
+    "implementation": "def main(a: float, b: float) -> float:\n    return a + b",
+    "input_schema": {"type": "object", "properties": {"a": {"type": "number"}, "b": {"type": "number"}}}
+  }'
+```
+
+### Web search
+
+```bash
+curl -X POST .../v1/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "latest AI research", "num_results": 10, "num_searches": 3}'
+```
+
+## Python SDK
+
+```python
+from foundry import Foundry
+
+client = Foundry(
+    base_url="https://YOUR-WORKSPACE--toolfoundry-serve.modal.run",
+)
+
+# Create a tool from a description
+tool = client.create("Calculate factorial of a number")
+result = tool.invoke(n=10)
+print(result.result)  # 3628800
+
+# Chain tools together
+chain = (
+    client.create("Search for news about AI")
+    .then(client.create("Summarize the key points"))
+)
+result = chain.invoke(topic="artificial intelligence")
+```
+
+Set `FOUNDRY_API_URL` to avoid passing `base_url` every time:
+
+```bash
+export FOUNDRY_API_URL=https://YOUR-WORKSPACE--toolfoundry-serve.modal.run
 ```
 
 ## API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| **Health** | | |
-| GET | `/health` | Health check |
-| GET | `/` | API info and available endpoints |
-| **Construct (Agent-Driven)** | | |
-| POST | `/v1/construct` | Build tool from natural language |
-| GET | `/v1/builds/{request_id}` | Check async build status |
-| **Tools (Direct)** | | |
-| POST | `/v1/tools` | Create tool with explicit code |
-| GET | `/v1/tools` | List all tools (filter by `org_id`) |
-| GET | `/v1/tools/{tool_id}` | Get tool manifest/schema |
-| DELETE | `/v1/tools/{tool_id}` | Delete a tool |
-| **Execution** | | |
-| POST | `/v1/tools/{tool_id}/invoke` | Execute the tool |
-| **Lifecycle** | | |
-| POST | `/v1/tools/{tool_id}/rebuild` | Fix/rebuild a broken tool |
-| POST | `/v1/tools/{tool_id}/deprecate` | Soft-delete a tool |
+| `GET` | `/health` | Health check |
+| `GET` | `/docs` | Swagger UI documentation |
+| `POST` | `/v1/construct` | Create tool from natural language |
+| `POST` | `/v1/tools` | Create tool with explicit code |
+| `GET` | `/v1/tools` | List all tools |
+| `GET` | `/v1/tools/{id}` | Get tool manifest/schema |
+| `POST` | `/v1/tools/{id}/invoke` | Execute a tool |
+| `DELETE` | `/v1/tools/{id}` | Delete a tool |
+| `POST` | `/v1/tools/{id}/rebuild` | Rebuild a broken tool |
+| `POST` | `/v1/tools/{id}/deprecate` | Soft-delete a tool |
+| `POST` | `/v1/search` | Web search with query expansion |
+| `GET` | `/v1/builds/{id}` | Check async build status |
 
-### Create Tool Request
+### Typed Result Envelope
 
-```python
-{
-    "name": "tool_name",
-    "description": "What the tool does",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "param1": {"type": "string"},
-            "param2": {"type": "number"}
-        },
-        "required": ["param1"]
-    },
-    "implementation": "def main(param1: str, param2: float = 0) -> dict:\n    return {'result': param1}",
-    "dependencies": [],           # Optional: pip packages from allowlist
-    "ttl_hours": 24,              # Optional: time to live (1-168 hours)
-    "org_id": "your-org",
-    "conversation_id": "conv-id"
-}
-```
-
-### Invoke Tool Request
-
-```python
-{
-    "input": {
-        "param1": "value",
-        "param2": 42
-    }
-}
-```
-
-## Security
-
-Tools run in isolated Modal Sandboxes with strict security constraints:
-
-| Constraint | Implementation |
-|------------|----------------|
-| Code validation | AST parsing for blocked patterns before deployment |
-| Module restriction | Allowlist enforced at validation time |
-| Egress control | Modal Sandboxes have no network by default |
-| Timeout | 30s default per tool invocation |
-| Memory | 256MB default per tool |
-| Secrets | Tools have no access to Modal secrets |
-| File system | Ephemeral, isolated per invocation |
-| Subprocess | Blocked via AST analysis |
-
-### Allowed Modules
-
-Tools can use these Python modules:
-
-**Standard Library:**
-- `math`, `datetime`, `json`, `re`, `typing`
-- `collections`, `itertools`, `functools`
-- `dataclasses`, `enum`, `decimal`, `fractions`
-- `statistics`, `random`, `uuid`, `hashlib`
-- `base64`, `urllib.parse`, `html`, `string`
-- `textwrap`, `copy`, `operator`, `numbers`, `abc`
-
-**Third-Party Packages:**
-- `pydantic`, `numpy`, `pandas`, `scipy`, `sklearn`
-
-### Blocked Patterns
-
-The following are explicitly blocked:
-- `os`, `sys`, `subprocess`, `shutil`, `socket`
-- `eval()`, `exec()`, `compile()`, `__import__()`
-- `open()`, `input()`, `breakpoint()`
-- Async functions (`async def`, `await`)
-- Dunder attributes (`__xxx__`)
-
-## Project Structure
-
-```
-tool-foundry/
-├── pyproject.toml              # Project dependencies
-├── foundry.py                  # Main Modal app
-├── README.md
-├── .env.example
-├── src/
-│   ├── __init__.py
-│   ├── api/
-│   │   ├── __init__.py
-│   │   ├── routes.py           # FastAPI routes
-│   │   └── schemas.py          # Pydantic models
-│   ├── builder/
-│   │   ├── __init__.py
-│   │   └── validator.py        # Restricted Python validation
-│   ├── registry/
-│   │   ├── __init__.py
-│   │   └── store.py            # Registry storage backends
-│   └── events/
-│       ├── __init__.py
-│       └── events.py            # System event emission
-└── tests/
-    ├── __init__.py
-    ├── test_api.py
-    └── test_validator.py
-```
-
-## Tool Integration Guide
-
-This section documents how AI agents interact with Tool Foundry via the `toolfoundry_construct` and `toolfoundry_invoke` tools.
-
-### Overview
-
-Tool Foundry provides two Foundry tools:
-
-| Tool | Purpose |
-|------|---------|
-| `toolfoundry_construct` | Build a new tool from natural language description |
-| `toolfoundry_invoke` | Execute a previously built tool |
-
-### API Base URL
-
-After deploying, your URL will follow this format:
-```
-https://{your-workspace}--toolfoundry-serve.modal.run
-```
-
-Find your workspace ID in the Modal dashboard or from the deploy output.
-
----
-
-### 1. Constructing a Tool
-
-**Endpoint:** `POST /v1/construct`
-
-**When to use:** When the agent needs a capability that doesn't exist as a built-in tool.
-
-#### Request
-
-```json
-{
-  "capability_description": "Calculate BMI from height in meters and weight in kilograms",
-  "org_id": "your-org",
-  "conversation_id": "conv-abc123",
-  "context": "User is asking about health metrics",
-  "ttl_hours": 24,
-  "async_build": false
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `capability_description` | string | Yes | Natural language description (10-2000 chars) |
-| `org_id` | string | Yes | Organization ID |
-| `conversation_id` | string | Yes | Conversation ID for tracking |
-| `context` | string | No | Additional context for the AI builder |
-| `ttl_hours` | int | No | Time to live (1-168, default 24) |
-| `async_build` | bool | No | If true, returns immediately (default true) |
-
-#### Response
-
-```json
-{
-  "request_id": "req-570648173277",
-  "tool_id": "tool-d1db3b21208b",
-  "status": "ready",
-  "message": "Tool created successfully",
-  "manifest_url": "https://{your-workspace}--toolfoundry-serve.modal.run/v1/tools/tool-d1db3b21208b",
-  "invoke_url": "https://{your-workspace}--toolfoundry-serve.modal.run/v1/tools/tool-d1db3b21208b/invoke"
-}
-```
-
----
-
-### 2. Getting Tool Schema (Optional)
-
-**Endpoint:** `GET /v1/tools/{tool_id}`
-
-Use this to understand what inputs the tool requires before invoking.
-
-#### Response
-
-```json
-{
-  "tool_id": "tool-d1db3b21208b",
-  "name": "calculate_bmi",
-  "description": "Calculate BMI from height and weight",
-  "status": "ready",
-  "input_schema": {
-    "type": "object",
-    "properties": {
-      "height_m": {
-        "type": "number",
-        "description": "Height in meters"
-      },
-      "weight_kg": {
-        "type": "number",
-        "description": "Weight in kilograms"
-      }
-    },
-    "required": ["height_m", "weight_kg"]
-  },
-  "output_schema": {
-    "type": "object"
-  },
-  "invoke_url": "https://{your-workspace}--toolfoundry-serve.modal.run/v1/tools/tool-d1db3b21208b/invoke"
-}
-```
-
----
-
-### 3. Invoking a Tool
-
-**Endpoint:** `POST /v1/tools/{tool_id}/invoke`
-
-#### Request
-
-```json
-{
-  "input": {
-    "height_m": 1.75,
-    "weight_kg": 70
-  }
-}
-```
-
-#### Response - Typed Result Envelope
-
-The response uses a **typed envelope** so agents can deterministically parse any result:
+Invoke responses use a typed envelope so agents can deterministically parse results:
 
 ```json
 {
   "success": true,
   "result_type": "number",
-  "result": {
-    "text": null,
-    "number": 22.86,
-    "image_base64": null,
-    "table": null,
-    "object": null
-  },
+  "result": { "number": 22.86 },
   "raw_result": 22.86,
-  "error": null,
-  "execution_time_ms": 2100
+  "execution_time_ms": 45
 }
 ```
 
-#### Result Types
-
-| `result_type` | Field to Read | Use Case |
-|---------------|---------------|----------|
+| `result_type` | Field | Use Case |
+|---------------|-------|----------|
 | `text` | `result.text` | Strings, formatted text |
 | `number` | `result.number` | Numeric calculations |
-| `image` | `result.image_base64` | Charts, visualizations (PNG/JPEG as base64) |
+| `image` | `result.image_base64` | Charts, visualizations (base64 PNG) |
 | `table` | `result.table` | List of objects/rows |
 | `object` | `result.object` | Complex structured data |
 
-#### Parsing Logic for Agents
+## Configuration
 
-```python
-def parse_tool_result(response: dict) -> Any:
-    """Parse Tool Foundry invoke response."""
-    if not response.get("success"):
-        raise ToolError(response.get("error"))
-    
-    result_type = response.get("result_type")
-    result = response.get("result", {})
-    
-    if result_type == "text":
-        return result.get("text")
-    elif result_type == "number":
-        return result.get("number")
-    elif result_type == "image":
-        return {"type": "image", "data": result.get("image_base64")}
-    elif result_type == "table":
-        return result.get("table")
-    elif result_type == "object":
-        return result.get("object")
-    else:
-        # Fallback to raw_result
-        return response.get("raw_result")
+### LLM Providers
+
+Set via the `foundry-branding` Modal secret:
+
+| Variable | Options | Default |
+|----------|---------|---------|
+| `FOUNDRY_LLM_PROVIDER` | `anthropic`, `openai` | `anthropic` |
+| `FOUNDRY_AGENT_MODEL` | Any supported model ID | `claude-sonnet-4-20250514` |
+
+### Optional Features
+
+All optional — the service works without any of these:
+
+| Feature | Secret Name | What It Enables |
+|---------|-------------|-----------------|
+| Web Search | `brave-credentials` | `/v1/search` endpoint via Brave API |
+| Exa Search | `exa-credentials` | Alternative search provider |
+| Database | `neon-credentials` | Multi-tenant auth, API key management, usage tracking |
+| Billing | `autumn-credentials` | Usage-based billing via Stripe |
+| Auth | Set `FOUNDRY_REQUIRE_AUTH=true` | Require API keys on all routes |
+
+### Swagger Branding
+
+Customize the API docs via `foundry-branding`:
+
+```bash
+modal secret create foundry-branding \
+  FOUNDRY_API_TITLE="My API" \
+  FOUNDRY_API_DESCRIPTION="Custom description" \
+  FOUNDRY_LOGO_URL="https://example.com/logo.png" \
+  FOUNDRY_CONTACT_NAME="Your Name" \
+  FOUNDRY_CONTACT_EMAIL="you@example.com" \
+  FOUNDRY_LLM_PROVIDER=anthropic \
+  FOUNDRY_AGENT_MODEL=claude-sonnet-4-20250514
 ```
 
----
+## Security Model
 
-### 4. Error Handling
+- **Code validation**: AST analysis blocks `eval`, `exec`, `os`, `subprocess`, `__import__`, etc.
+- **Module allowlist**: Only safe modules (math, json, numpy, pandas, scipy, sklearn, etc.)
+- **Sandboxed execution**: Modal Sandbox — no filesystem, network, or system access
+- **Resource limits**: 30s timeout, 256MB memory per invocation
+- **Secret isolation**: Generated tools cannot access Foundry's own credentials
 
-#### Build Errors
-
-```json
-{
-  "request_id": "req-123",
-  "tool_id": null,
-  "status": "failed",
-  "message": "Validation failed: subprocess module is not allowed"
-}
-```
-
-#### Invoke Errors
-
-```json
-{
-  "success": false,
-  "result_type": null,
-  "result": {
-    "text": null,
-    "number": null,
-    "image_base64": null,
-    "table": null,
-    "object": null
-  },
-  "raw_result": null,
-  "error": "division by zero",
-  "execution_time_ms": 50
-}
-```
-
----
-
-### 5. Complete Agent Workflow
+## Project Structure
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ User: "What's my BMI if I'm 1.75m tall and weigh 70kg?"        │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ Agent: No BMI tool exists. Use toolfoundry_construct.          │
-│                                                                 │
-│ POST /v1/construct                                              │
-│ { "capability_description": "Calculate BMI from height/weight" }│
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ Tool Foundry: AI plans and generates tool code                 │
-│                                                                 │
-│ Returns: { "tool_id": "tool-abc123", "status": "ready" }        │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ Agent: Tool ready. Use toolfoundry_invoke.                     │
-│                                                                 │
-│ POST /v1/tools/tool-abc123/invoke                              │
-│ { "input": { "height_m": 1.75, "weight_kg": 70 } }             │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ Tool Foundry: Executes tool in sandbox                         │
-│                                                                 │
-│ Returns: {                                                      │
-│   "success": true,                                              │
-│   "result_type": "number",                                      │
-│   "result": { "number": 22.86 }                                 │
-│ }                                                               │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ Agent: Parse result.number = 22.86                             │
-│                                                                 │
-│ Response: "Your BMI is 22.86, which is in the normal range."   │
-└─────────────────────────────────────────────────────────────────┘
+foundry.py              # Modal app entry point
+deploy.sh               # Interactive deployment script
+src/
+  api/
+    routes.py           # FastAPI endpoints + landing page
+    auth.py             # API key authentication + rate limiting
+    schemas.py          # Pydantic request/response models
+    billing.py          # Optional billing endpoints (Autumn/Stripe)
+    keys.py             # API key management endpoints
+    usage.py            # Usage tracking endpoints
+    secrets.py          # Per-tool secret injection
+  agent/
+    builder_agent.py    # AI agent that generates tool code
+    planner.py          # Tool planning logic
+    tools.py            # Agent tool definitions
+    providers.py        # LLM provider abstraction (Anthropic/OpenAI)
+    prompts.py          # System prompts for code generation
+    sdk_agents.py       # OpenAI Agents SDK integration
+    generator.py        # Code generation pipeline
+  builder/
+    validator.py        # AST-based code validation
+    sandbox.py          # Sandboxed execution (Modal Sandbox / local)
+  infra/
+    config.py           # Centralized settings (Pydantic)
+    database.py         # Optional Postgres/Neon integration
+    secrets.py          # Secret management helpers
+    logging.py          # Structured logging
+    autumn.py           # Optional Autumn billing client
+  registry/
+    store.py            # Tool storage (Modal Dict or in-memory)
+  orchestration/
+    workflow.py         # Build orchestration
+  events/
+    emitter.py          # Event emission
+sdk/
+  foundry/
+    client.py           # Python SDK
+    exceptions.py       # SDK exceptions
+tests/
+  test_api.py
+  test_validator.py
 ```
-
----
-
-### 6. Available Tool Capabilities
-
-Tools can be built for:
-
-| Category | Examples |
-|----------|----------|
-| **Math/Stats** | BMI, compound interest, percentiles, statistics |
-| **Data Processing** | JSON transformation, CSV parsing, data validation |
-| **Visualization** | Line charts, bar charts, scatter plots (returns base64 PNG) |
-| **Search** | Web search via Exa API (API key provided in sandbox) |
-| **Text** | Formatting, parsing, regex extraction |
-
-**Limitations:**
-- No file system access
-- No subprocess execution
-- 30 second timeout
-- 256MB memory limit
-
----
-
-### 7. Swagger Documentation
-
-Interactive API docs available at your deployment URL:
-```
-https://{your-workspace}--toolfoundry-serve.modal.run/docs
-```
-
-## Cost Estimate
-
-Modal pricing is simple and usage-based:
-
-- **CPU**: $0.192/hour per vCPU
-- **Memory**: $0.024/hour per GB
-- **GPU**: $1.10-$4.76/hour (if needed)
-
-For the Foundry:
-- API endpoint: ~$5-20/month (depends on traffic)
-- Tool executions: ~$0.001-0.01 per invocation
-- **Estimated total**: $20-50/month for moderate usage
 
 ## Development
 
 ```bash
 # Install dev dependencies
-pip install pytest pytest-asyncio ruff pyright
+pip install -e ".[dev]"
 
-# Run linter
-ruff check .
-
-# Run type checker
-pyright
+# Local development with hot reload
+modal serve foundry.py
 
 # Run tests
 PYTHONPATH=. pytest tests/ -v
 
-# Local Modal development (hot reload)
-modal serve foundry.py
+# Lint
+ruff check .
+
+# Type check
+pyright
 ```
 
-## Implementation Phases
+## Cost Estimate
 
-### Phase 1: MVP (Current)
-- Modal app with basic web endpoints
-- In-memory registry
-- Code validation (blocked patterns)
-- Synchronous tool execution
+Modal is pay-per-use with no idle costs:
 
-### Phase 2: Production
-- Neon PostgreSQL for persistent registry
-- System event integration with backend
-- TTL management and cleanup
-- Error handling and logging
-- Rate limiting
-
-### Phase 3: Enhancements
-- Template library (pre-built tool templates)
-- Usage analytics
-- Promotion pipeline to Azure repo
-- Multi-org isolation
+- **API endpoint**: ~$5-20/month depending on traffic
+- **Tool executions**: ~$0.001-0.01 per invocation
+- **Estimated total**: $20-50/month for moderate usage
 
 ## License
 
-Proprietary - Foundry
-# tool-foundry
+MIT

@@ -1,6 +1,6 @@
 # Foundry SDK
 
-Python SDK for [Foundry](https://foundry.ai) - Build AI-powered tools from natural language descriptions.
+Python SDK for Foundry - Build AI-powered tools from natural language descriptions.
 
 ## Installation
 

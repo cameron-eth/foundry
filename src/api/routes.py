@@ -116,7 +116,7 @@ def get_base_url() -> str:
     if os.environ.get("MODAL_ENVIRONMENT") or os.environ.get("MODAL_TASK_ID"):
         # We're in Modal - use the known deployment URL pattern
         # This can be overridden via FOUNDRY_API_BASE_URL if the workspace changes
-        return "https://camfleety--toolfoundry-serve.modal.run"
+        return "https://{workspace}--toolfoundry-serve.modal.run"
 
     # 5. Development fallback
     return "http://localhost:8000"
@@ -473,7 +473,8 @@ web_app = FastAPI(
     terms_of_service=_api_config["terms_of_service"] or None,
     contact=_contact_info,
     license_info={
-        "name": "Proprietary",
+        "name": "MIT",
+        "url": "https://opensource.org/licenses/MIT",
     },
     openapi_tags=[
         {
@@ -507,10 +508,7 @@ _allowed_origins = [
     for origin in _os.environ.get(
         "FOUNDRY_CORS_ORIGINS",
         # Default: allow localhost dev + Vercel + custom domain
-        "http://localhost:3000,http://localhost:3001,"
-        "https://foundry.ai,https://www.foundry.ai,"
-        "https://*.vercel.app,"
-        "https://camfleety--toolfoundry-serve.modal.run",
+        "http://localhost:3000,http://localhost:3001",
     ).split(",")
     if origin.strip()
 ]

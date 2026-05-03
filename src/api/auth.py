@@ -279,7 +279,7 @@ async def check_usage_limit(auth: AuthContext, event_type: str) -> bool:
                     detail=(
                         f"Usage limit reached for {event_type} "
                         f"(balance: {result.balance}, usage: {result.usage}/{result.included_usage}). "
-                        f"Upgrade your plan at https://foundry.ai/pricing"
+                        f"Upgrade your plan or increase limits in your configuration"
                     ),
                 )
         else:
@@ -312,7 +312,7 @@ async def check_usage_limit(auth: AuthContext, event_type: str) -> bool:
         if limit != -1 and current >= limit:
             raise HTTPException(
                 status_code=429,
-                detail=f"Monthly {event_type} limit exceeded ({current}/{limit}). Upgrade your plan at https://foundry.ai/pricing",
+                detail=f"Monthly {event_type} limit exceeded ({current}/{limit}). Upgrade your plan or increase limits in your configuration",
             )
 
     return True

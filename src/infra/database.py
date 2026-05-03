@@ -45,8 +45,7 @@ class NeonDB:
         host = parsed.hostname or ""
         
         # Strip -pooler suffix for HTTP endpoint
-        # e.g., ep-purple-band-ail6lb3c-pooler.c-4.us-east-1.aws.neon.tech
-        #     → ep-purple-band-ail6lb3c.c-4.us-east-1.aws.neon.tech
+        # e.g., ep-xxx-pooler.region.aws.neon.tech → ep-xxx.region.aws.neon.tech
         http_host = host.replace("-pooler", "")
         self._http_host = http_host
         

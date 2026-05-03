@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
 authors = [
-    { name = "Foundry", email = "hello@foundry.ai" },
+    { name = "Foundry" },
 ]
 keywords = [
     "ai",
@@ -41,9 +41,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://foundry.ai"
-Documentation = "https://docs.foundry.ai"
-Repository = "https://github.com/foundry-ai/foundry-sdk"
+Repository = "https://github.com/cameron-eth/foundry"
 
 [tool.hatch.build.targets.sdist]
 include = [

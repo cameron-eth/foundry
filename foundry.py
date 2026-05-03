@@ -265,4 +265,3 @@ def main():
     # Run health check
     result = health_check.local()
     print("Health check:", result)
-# Force rebuild Mon Feb  2 21:04:31 EST 2026

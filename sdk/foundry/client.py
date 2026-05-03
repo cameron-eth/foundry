@@ -318,7 +318,7 @@ class Foundry:
         self.base_url = (
             base_url
             or os.environ.get("FOUNDRY_API_URL")
-            or "https://camfleety--toolfoundry-serve.modal.run"
+            or "http://localhost:8000"
         ).rstrip("/")
         
         self.api_key = api_key or os.environ.get("FOUNDRY_API_KEY")
